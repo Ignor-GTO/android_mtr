@@ -14,14 +14,14 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "dev.netmtr.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "uz.spi.netmtr_2"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 2
-        versionName = "2.1.0"
+        targetSdk = 36
+        versionCode = 3
+        versionName = "2.2.0"
     }
 
     signingConfigs {
