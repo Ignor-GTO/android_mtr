@@ -44,29 +44,41 @@ object PdfReport {
             text("Начало: ${ReportText.timeFormat.format(result.startedAt)}", body, 14f)
             text("Конец: ${ReportText.timeFormat.format(result.finishedAt)}", body, 14f)
             gap(8f)
-            heading("Выводы")
-            Conclusions.build(result).forEach { note -> paragraph("• $note") }
             result.speed?.let { speed ->
                 heading("Скорость")
-                paragraph("Окно замера: около 8 с загрузки и 6 с отдачи, сервер Cloudflare.")
                 table(
-                    listOf(90f, 110f, 90f, 80f),
-                    listOf("Направление", "Скорость", "Объём", "Время"),
+                    listOf(180f, 120f),
+                    listOf("Показатель", "Значение"),
                     listOf(
-                        listOf(
-                            "Загрузка",
-                            speed.downloadError ?: TextFormat.mbps(speed.downloadMbps),
-                            if (speed.downloadBytes == 0L) "—" else TextFormat.megabytes(speed.downloadBytes),
-                            if (speed.downloadMs == 0L) "—" else TextFormat.seconds(speed.downloadMs),
-                        ),
-                        listOf(
-                            "Отдача",
-                            speed.uploadError ?: TextFormat.mbps(speed.uploadMbps),
-                            if (speed.uploadBytes == 0L) "—" else TextFormat.megabytes(speed.uploadBytes),
-                            if (speed.uploadMs == 0L) "—" else TextFormat.seconds(speed.uploadMs),
-                        ),
+                        listOf("DOWNLOAD Mbps", TextFormat.mbpsNumber(speed.downloadMbps)),
+                        listOf("UPLOAD Mbps", TextFormat.mbpsNumber(speed.uploadMbps)),
+                        listOf("Ping ms", TextFormat.latencyMs(speed.pingMs)),
+                        listOf("↓ загрузка, мс", TextFormat.latencyMs(speed.downloadLatencyMs)),
+                        listOf("↑ отдача, мс", TextFormat.latencyMs(speed.uploadLatencyMs)),
                     ),
                 )
+                val errors = listOfNotNull(speed.downloadError, speed.uploadError)
+                if (errors.isNotEmpty()) paragraph(errors.joinToString("; "))
+            }
+            result.wifi?.let { survey ->
+                heading("Частоты Wi‑Fi")
+                paragraph(survey.routerLine())
+                survey.note?.let { paragraph(it) }
+                if (survey.channels.isNotEmpty()) {
+                    table(
+                        listOf(50f, 60f, 70f, 60f, 90f),
+                        listOf("Канал", "МГц", "Диапазон", "Соседей", "Статус"),
+                        survey.channels.map { channel ->
+                            listOf(
+                                channel.channel.toString(),
+                                channel.frequencyMhz.toString(),
+                                channel.band,
+                                channel.neighbors.toString(),
+                                if (channel.own) "${channel.load}, наш" else channel.load,
+                            )
+                        },
+                    )
+                }
             }
             result.network?.let { network ->
                 heading("Устройство и сеть")
@@ -111,6 +123,11 @@ object PdfReport {
                 heading("MTR до ${result.host}")
                 if (result.cycles != null) {
                     paragraph("Циклов: ${result.cycles}, таймаут: ${result.timeoutSec ?: "—"} с.")
+                }
+                if (result.intervalSec != null) {
+                    paragraph(
+                        "Интервал: ${String.format(java.util.Locale.US, "%.1f", result.intervalSec)} с, размер пинга: ${result.pingBytes ?: "—"} байт, кэш хостов: ${result.hostCache ?: "—"}, имена: ${if (result.resolveNames == true) "да" else "нет"}.",
+                    )
                 }
                 val widths = listOf(28f, 150f, 52f, 40f, 40f, 52f, 52f)
                 table(

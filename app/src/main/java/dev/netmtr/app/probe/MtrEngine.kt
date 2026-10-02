@@ -1,6 +1,10 @@
 package dev.netmtr.app.probe
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
+import java.net.InetAddress
 import kotlin.coroutines.coroutineContext
 
 data class MtrProgress(
@@ -17,9 +21,14 @@ class MtrEngine(private val ping: PingClient) {
         cycles: Int,
         maxHops: Int,
         timeoutSec: Int,
+        intervalMs: Long = 1_000,
+        payloadBytes: Int = 64,
+        resolveNames: Boolean = false,
+        maxHosts: Int = 60,
         onUpdate: (MtrProgress) -> Unit,
     ): List<HopRow> {
         ping.calibrate()
+        val names = HostCache(maxHosts.coerceAtLeast(1))
         val slots = linkedMapOf<Int, Slot>()
         var destinationTtl: Int? = null
         for (cycle in 1..cycles) {
@@ -29,37 +38,40 @@ class MtrEngine(private val ping: PingClient) {
             for (ttl in 1..limit) {
                 coroutineContext.ensureActive()
                 onUpdate(MtrProgress(cycle, cycles, ttl, limit, slots.rows()))
-                val probe = ping.probe(host, ttl, timeoutSec)
+                val started = System.nanoTime()
+                val probe = ping.probe(host, ttl, timeoutSec, payloadBytes = payloadBytes, numeric = !resolveNames)
                 if (probe is Probe.Failure) throw ProbeException(probe.message)
                 val slot = slots.getOrPut(ttl) { Slot(ttl) }
                 slot.sent++
+                var stopHop = false
                 when (probe) {
                     is Probe.Echo -> {
-                        slot.hear(probe.address, probe.rttMs, reachedTarget = true)
+                        slot.hear(names.label(probe.address, resolveNames), probe.rttMs, reachedTarget = true)
                         destinationTtl = ttl
                         trailingStars = 0
-                        onUpdate(MtrProgress(cycle, cycles, ttl, limit, slots.rows()))
-                        break
+                        stopHop = true
                     }
                     is Probe.Transit -> {
-                        slot.hear(probe.address, probe.rttMs, reachedTarget = false)
+                        slot.hear(names.label(probe.address, resolveNames), probe.rttMs, reachedTarget = false)
                         trailingStars = 0
                     }
                     is Probe.Unreachable -> {
-                        slot.hear(probe.address, probe.rttMs, reachedTarget = false)
-                        onUpdate(MtrProgress(cycle, cycles, ttl, limit, slots.rows()))
-                        break
+                        slot.hear(names.label(probe.address, resolveNames), probe.rttMs, reachedTarget = false)
+                        stopHop = true
                     }
                     Probe.Timeout -> {
                         trailingStars++
                         if (destinationTtl == null && trailingStars >= STAR_LIMIT && ttl >= STAR_LIMIT) {
-                            onUpdate(MtrProgress(cycle, cycles, ttl, limit, slots.rows()))
-                            break
+                            stopHop = true
                         }
                     }
                     is Probe.Failure -> Unit
                 }
                 onUpdate(MtrProgress(cycle, cycles, ttl, limit, slots.rows()))
+                val spent = (System.nanoTime() - started) / 1_000_000
+                val wait = intervalMs - spent
+                if (wait > 0) delay(wait)
+                if (stopHop) break
             }
         }
         return slots.rows()
@@ -103,6 +115,31 @@ class MtrEngine(private val ping: PingClient) {
 
     private fun Map<Int, Slot>.rows(): List<HopRow> {
         return values.filter { it.sent > 0 }.sortedBy { it.hop }.map { it.row() }
+    }
+
+    private class HostCache(private val limit: Int) {
+        private val values = LinkedHashMap<String, String>(16, 0.75f, true)
+
+        suspend fun label(address: String, resolve: Boolean): String {
+            if (!resolve || address.isBlank() || address == "*") return address
+            synchronized(values) { values[address] }?.let { return it }
+            val name = withContext(Dispatchers.IO) {
+                try {
+                    val host = InetAddress.getByName(address).canonicalHostName
+                    if (host.isBlank() || host.equals(address, ignoreCase = true)) address else host
+                } catch (_: Exception) {
+                    address
+                }
+            }
+            synchronized(values) {
+                values[address] = name
+                while (values.size > limit) {
+                    val eldest = values.entries.first().key
+                    values.remove(eldest)
+                }
+            }
+            return name
+        }
     }
 
     companion object {

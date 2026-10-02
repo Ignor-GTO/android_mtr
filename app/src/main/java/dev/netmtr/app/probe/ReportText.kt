@@ -12,12 +12,6 @@ object ReportText {
         appendLine("Начало: ${result.startedAt.format(timeFormat)}")
         appendLine("Конец:  ${result.finishedAt.format(timeFormat)}")
         appendLine("Приложение: ${result.appVersion}")
-        appendLine()
-        appendLine("Выводы")
-        appendLine("------")
-        Conclusions.build(result).forEach { note ->
-            appendLine("• $note")
-        }
 
         result.network?.let { network ->
             appendLine()
@@ -98,6 +92,7 @@ object ReportText {
         }
 
         result.speed?.let { appendSpeed(it) }
+        result.wifi?.let { appendWifi(it) }
 
         result.gatewayPing?.let { appendPing("Пинг шлюза", it) }
         result.targetPing?.let { appendPing("Пинг цели", it) }
@@ -108,6 +103,11 @@ object ReportText {
             appendLine("-----------------")
             appendLine("Цель: ${result.host}")
             if (result.cycles != null) appendLine("Циклов: ${result.cycles}, максимум прыжков: ${result.maxHops ?: "—"}, таймаут: ${result.timeoutSec ?: "—"} с")
+            if (result.intervalSec != null) {
+                appendLine(
+                    "Интервал: ${String.format(Locale.US, "%.1f", result.intervalSec)} с, размер пинга: ${result.pingBytes ?: "—"} байт, кэш хостов: ${result.hostCache ?: "—"}, имена: ${if (result.resolveNames == true) "да" else "нет"}",
+                )
+            }
             if (result.overheadApplied && result.overheadMs != null) {
                 appendLine(
                     "Поправка на запуск ping: ${TextFormat.ms(result.overheadMs)} мс, вычтена из задержки промежуточных прыжков.",
@@ -146,20 +146,39 @@ object ReportText {
         appendLine()
         appendLine("Скорость")
         appendLine("--------")
-        appendLine("Оценка по передаче на Cloudflare, около 8 с загрузки и 6 с отдачи. Это не тариф провайдера.")
-        if (speed.downloadError == null && speed.downloadMbps != null) {
+        appendLine("DOWNLOAD Mbps  ${TextFormat.mbpsNumber(speed.downloadMbps)}")
+        appendLine("UPLOAD Mbps    ${TextFormat.mbpsNumber(speed.uploadMbps)}")
+        appendLine("Ping ms        ${TextFormat.latencyMs(speed.pingMs)}")
+        appendLine("↓ загрузка     ${TextFormat.latencyMs(speed.downloadLatencyMs)} мс")
+        appendLine("↑ отдача       ${TextFormat.latencyMs(speed.uploadLatencyMs)} мс")
+        val errors = listOfNotNull(speed.downloadError, speed.uploadError)
+        if (errors.isNotEmpty()) appendLine(errors.joinToString("; "))
+    }
+
+    private fun StringBuilder.appendWifi(survey: WifiSurvey) {
+        appendLine()
+        appendLine("Частоты Wi‑Fi")
+        appendLine("-------------")
+        appendLine(survey.routerLine())
+        survey.note?.let { appendLine(it) }
+        if (survey.channels.isEmpty()) return
+        appendLine("Канал  МГц    Диапазон  Соседей  Сигнал  Статус")
+        survey.channels.forEach { channel ->
+            val own = if (channel.own) " наш" else ""
+            val signal = channel.strongestDbm?.let { "$it дБм" } ?: "—"
             appendLine(
-                "Загрузка: ${TextFormat.mbps(speed.downloadMbps)}, ${TextFormat.megabytes(speed.downloadBytes)} за ${TextFormat.seconds(speed.downloadMs)}",
+                String.format(
+                    Locale.US,
+                    "%5d  %4d  %-8s  %7d  %7s  %s%s",
+                    channel.channel,
+                    channel.frequencyMhz,
+                    channel.band,
+                    channel.neighbors,
+                    signal,
+                    channel.load,
+                    own,
+                ),
             )
-        } else {
-            appendLine("Загрузка: ${speed.downloadError ?: "нет данных"}")
-        }
-        if (speed.uploadError == null && speed.uploadMbps != null) {
-            appendLine(
-                "Отдача: ${TextFormat.mbps(speed.uploadMbps)}, ${TextFormat.megabytes(speed.uploadBytes)} за ${TextFormat.seconds(speed.uploadMs)}",
-            )
-        } else {
-            appendLine("Отдача: ${speed.uploadError ?: "нет данных"}")
         }
     }
 

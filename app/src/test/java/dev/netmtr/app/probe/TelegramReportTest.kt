@@ -29,7 +29,9 @@ class TelegramReportTest {
         assertTrue(html.contains("<th align=\"right\">Потери</th>"))
         assertTrue(html.contains("<td align=\"right\">0.0%</td>"))
         assertTrue(html.contains("<caption>Скорость</caption>"))
-        assertTrue(html.contains("42.5 Мбит/с"))
+        assertTrue(html.contains("DOWNLOAD Mbps"))
+        assertTrue(html.contains("42.50"))
+        assertFalse(html.contains("Выводы"))
     }
 
     @Test

@@ -1,5 +1,6 @@
 package dev.netmtr.app.probe
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ensureActive
 import java.io.File
 import kotlin.coroutines.coroutineContext
@@ -57,9 +58,15 @@ class PingClient(
         calibrated = true
     }
 
-    suspend fun probe(host: String, ttl: Int, timeoutSec: Int): Probe {
+    suspend fun probe(
+        host: String,
+        ttl: Int,
+        timeoutSec: Int,
+        payloadBytes: Int = 64,
+        numeric: Boolean = true,
+    ): Probe {
         var last = Probe.Failure("ping не выполнился", usage = false)
-        for ((index, command) in commands(host, count = 1, timeoutSec = timeoutSec, ttl = ttl).withIndex()) {
+        for ((index, command) in commands(host, count = 1, timeoutSec = timeoutSec, ttl = ttl, payloadBytes = payloadBytes, numeric = numeric).withIndex()) {
             coroutineContext.ensureActive()
             val result = probeOnce(command, timeoutSec)
             val retry = result is Probe.Failure && result.usage && index < 2
@@ -72,14 +79,31 @@ class PingClient(
         return last
     }
 
+    suspend fun oneRtt(host: String, timeoutSec: Int = 1, payloadBytes: Int = 64): Double? {
+        return try {
+            val attempts = commands(host, count = 1, timeoutSec = timeoutSec, ttl = null, payloadBytes = payloadBytes, numeric = true)
+            for ((index, command) in attempts.withIndex()) {
+                val outcome = collect(host, command, 1, timeoutSec) {}
+                if (outcome.usage && outcome.samples.isEmpty() && index < attempts.lastIndex) continue
+                return outcome.samples.minOrNull()
+            }
+            null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     suspend fun pingMany(
         host: String,
         count: Int,
         timeoutSec: Int,
+        payloadBytes: Int = 64,
         onUpdate: (PingSummary) -> Unit,
     ): PingSummary {
         var lastError = "ping не выполнился"
-        val attempts = commands(host, count = count, timeoutSec = timeoutSec, ttl = null)
+        val attempts = commands(host, count = count, timeoutSec = timeoutSec, ttl = null, payloadBytes = payloadBytes, numeric = true)
         for ((index, command) in attempts.withIndex()) {
             coroutineContext.ensureActive()
             val outcome = collect(host, command, count, timeoutSec, onUpdate)
@@ -167,10 +191,20 @@ class PingClient(
         return (elapsedMs - overheadMs).coerceAtLeast(0.1)
     }
 
-    private fun commands(host: String, count: Int, timeoutSec: Int, ttl: Int?): List<List<String>> {
+    private fun commands(
+        host: String,
+        count: Int,
+        timeoutSec: Int,
+        ttl: Int?,
+        payloadBytes: Int,
+        numeric: Boolean,
+    ): List<List<String>> {
         val family = if (host.contains(':')) "-6" else "-4"
-        val full = mutableListOf(pingBinary, family, "-n", "-c", count.toString(), "-W", timeoutSec.toString())
+        val full = mutableListOf(pingBinary, family)
+        if (numeric) full += "-n"
+        full += listOf("-c", count.toString(), "-W", timeoutSec.toString())
         if (count == 1) full += listOf("-w", (timeoutSec + 1).toString())
+        if (payloadBytes > 0) full += listOf("-s", payloadBytes.toString())
         if (ttl != null) full += listOf("-t", ttl.toString())
         full += host
 

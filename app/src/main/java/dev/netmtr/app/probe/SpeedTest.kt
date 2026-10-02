@@ -2,7 +2,9 @@ package dev.netmtr.app.probe
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -12,10 +14,35 @@ import kotlin.coroutines.coroutineContext
 
 object SpeedTest {
     suspend fun measure(onStatus: (String) -> Unit): SpeedResult = withContext(Dispatchers.IO) {
+        val ping = PingClient()
+        onStatus("Пинг…")
+        val idle = mutableListOf<Double>()
+        repeat(4) {
+            coroutineContext.ensureActive()
+            ping.oneRtt(LATENCY_HOST)?.let { idle += it }
+        }
         onStatus("Замер загрузки…")
-        val download = capture { transferDownload(onStatus) }
+        val downloadLatency = mutableListOf<Double>()
+        val download = coroutineScope {
+            val samples = launch { collectLatency(ping, downloadLatency) }
+            try {
+                capture { transferDownload(onStatus) }
+            } finally {
+                samples.cancel()
+                samples.join()
+            }
+        }
         onStatus("Замер отдачи…")
-        val upload = capture { transferUpload(onStatus) }
+        val uploadLatency = mutableListOf<Double>()
+        val upload = coroutineScope {
+            val samples = launch { collectLatency(ping, uploadLatency) }
+            try {
+                capture { transferUpload(onStatus) }
+            } finally {
+                samples.cancel()
+                samples.join()
+            }
+        }
         val down = download.getOrNull()
         val up = upload.getOrNull()
         SpeedResult(
@@ -27,7 +54,22 @@ object SpeedTest {
             uploadMs = up?.ms ?: 0L,
             downloadError = download.exceptionOrNull()?.message ?: down?.error,
             uploadError = upload.exceptionOrNull()?.message ?: up?.error,
+            pingMs = idle.minOrNull(),
+            downloadLatencyMs = Rtt.median(downloadLatency),
+            uploadLatencyMs = Rtt.median(uploadLatency),
         )
+    }
+
+    private suspend fun collectLatency(ping: PingClient, into: MutableList<Double>) {
+        try {
+            while (true) {
+                coroutineContext.ensureActive()
+                ping.oneRtt(LATENCY_HOST)?.let { sample ->
+                    synchronized(into) { into += sample }
+                }
+            }
+        } catch (_: CancellationException) {
+        }
     }
 
     private suspend fun transferDownload(onStatus: (String) -> Unit): Sample {
@@ -161,4 +203,5 @@ object SpeedTest {
     private const val UPLOAD_LIMIT_MS = 6_000L
     private const val UPLOAD_CAP_BYTES = 8_000_000L
     private const val UPLOAD_URL = "https://speed.cloudflare.com/__up"
+    private const val LATENCY_HOST = "1.1.1.1"
 }

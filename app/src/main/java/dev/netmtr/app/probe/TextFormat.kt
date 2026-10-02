@@ -17,6 +17,14 @@ object TextFormat {
         return if (value == null) "—" else String.format(Locale.US, "%.1f Мбит/с", value)
     }
 
+    fun mbpsNumber(value: Double?): String {
+        return if (value == null) "—" else String.format(Locale.US, "%.2f", value)
+    }
+
+    fun latencyMs(value: Double?): String {
+        return if (value == null) "—" else String.format(Locale.US, "%.0f", value)
+    }
+
     fun megabytes(bytes: Long): String {
         return String.format(Locale.US, "%.1f МБ", bytes / 1_000_000.0)
     }

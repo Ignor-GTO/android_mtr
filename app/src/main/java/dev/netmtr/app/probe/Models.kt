@@ -8,6 +8,7 @@ enum class TestMode(val title: String) {
     TRACE("Трассировка"),
     PING("Пинг"),
     SPEED("Скорость"),
+    WIFI("Частоты Wi‑Fi"),
 }
 
 class ProbeException(message: String) : Exception(message)
@@ -113,6 +114,9 @@ data class SpeedResult(
     val uploadMs: Long,
     val downloadError: String?,
     val uploadError: String?,
+    val pingMs: Double? = null,
+    val downloadLatencyMs: Double? = null,
+    val uploadLatencyMs: Double? = null,
 )
 
 data class TestResult(
@@ -140,9 +144,21 @@ data class TestResult(
     val error: String?,
     val remarks: List<String> = emptyList(),
     val speed: SpeedResult? = null,
+    val intervalSec: Double? = null,
+    val pingBytes: Int? = null,
+    val hostCache: Int? = null,
+    val resolveNames: Boolean? = null,
+    val wifi: WifiSurvey? = null,
 )
 
 object Rtt {
+    fun median(samples: List<Double>): Double? {
+        if (samples.isEmpty()) return null
+        val sorted = samples.sorted()
+        val mid = sorted.size / 2
+        return if (sorted.size % 2 == 0) (sorted[mid - 1] + sorted[mid]) / 2.0 else sorted[mid]
+    }
+
     fun jitter(samples: List<Double>): Double? {
         if (samples.size < 2) return null
         var sum = 0.0

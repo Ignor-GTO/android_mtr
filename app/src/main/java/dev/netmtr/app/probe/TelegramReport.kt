@@ -15,14 +15,8 @@ object TelegramReport {
         append(esc("Приложение: ${result.appVersion}"))
         append("</p>")
 
-        val notes = Conclusions.build(result)
-        if (notes.isNotEmpty()) {
-            append("<h3>Выводы</h3><ul>")
-            notes.forEach { append("<li>").append(esc(it)).append("</li>") }
-            append("</ul>")
-        }
-
         result.speed?.let { appendSpeed(it) }
+        result.wifi?.let { appendWifi(it) }
         appendPings(result)
         if (result.hops.isNotEmpty()) appendMtr(result)
         result.network?.let { appendNetwork(result, it) }
@@ -34,23 +28,34 @@ object TelegramReport {
     }
 
     private fun StringBuilder.appendSpeed(speed: SpeedResult) {
-        table("Скорость", listOf("Направление", "Скорость", "Объём", "Время"), rightFrom = 1) {
-            row(
-                "Загрузка",
-                speed.downloadError?.let { "ошибка" } ?: TextFormat.mbps(speed.downloadMbps),
-                if (speed.downloadBytes == 0L) "—" else TextFormat.megabytes(speed.downloadBytes),
-                if (speed.downloadMs == 0L) "—" else TextFormat.seconds(speed.downloadMs),
-            )
-            row(
-                "Отдача",
-                speed.uploadError?.let { "ошибка" } ?: TextFormat.mbps(speed.uploadMbps),
-                if (speed.uploadBytes == 0L) "—" else TextFormat.megabytes(speed.uploadBytes),
-                if (speed.uploadMs == 0L) "—" else TextFormat.seconds(speed.uploadMs),
-            )
+        table("Скорость", listOf("Показатель", "Значение"), rightFrom = 1) {
+            row("DOWNLOAD Mbps", TextFormat.mbpsNumber(speed.downloadMbps))
+            row("UPLOAD Mbps", TextFormat.mbpsNumber(speed.uploadMbps))
+            row("Ping ms", TextFormat.latencyMs(speed.pingMs))
+            row("↓ загрузка, мс", TextFormat.latencyMs(speed.downloadLatencyMs))
+            row("↑ отдача, мс", TextFormat.latencyMs(speed.uploadLatencyMs))
         }
         val errors = listOfNotNull(speed.downloadError, speed.uploadError)
         if (errors.isNotEmpty()) {
             append("<p>").append(esc(errors.joinToString("; "))).append("</p>")
+        }
+    }
+
+    private fun StringBuilder.appendWifi(survey: WifiSurvey) {
+        append("<p>").append(esc(survey.routerLine())).append("</p>")
+        survey.note?.let { append("<p>").append(esc(it)).append("</p>") }
+        if (survey.channels.isEmpty()) return
+        table("Частоты Wi‑Fi", listOf("Канал", "МГц", "Диапазон", "Соседей", "Статус"), rightFrom = 3) {
+            survey.channels.forEach { channel ->
+                val status = if (channel.own) "${channel.load}, наш" else channel.load
+                row(
+                    channel.channel.toString(),
+                    channel.frequencyMhz.toString(),
+                    channel.band,
+                    channel.neighbors.toString(),
+                    status,
+                )
+            }
         }
     }
 

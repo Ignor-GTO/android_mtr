@@ -5,7 +5,6 @@ import android.net.Uri
 import android.os.PowerManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import dev.netmtr.app.probe.Conclusions
 import dev.netmtr.app.probe.DnsResult
 import dev.netmtr.app.probe.HopRow
 import dev.netmtr.app.probe.Hosts
@@ -26,6 +25,8 @@ import dev.netmtr.app.probe.TelegramReport
 import dev.netmtr.app.probe.TestMode
 import dev.netmtr.app.probe.TestResult
 import dev.netmtr.app.probe.TextFormat
+import dev.netmtr.app.probe.WifiSurvey
+import dev.netmtr.app.probe.WifiSurveyor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -45,6 +46,10 @@ data class UiState(
     val maxHops: Int = 20,
     val timeoutSec: Int = 2,
     val pingCount: Int = 20,
+    val intervalTenths: Int = 10,
+    val pingSize: Int = 64,
+    val maxHosts: Int = 60,
+    val resolveNames: Boolean = false,
     val running: Boolean = false,
     val status: String = "Укажите адрес и запустите проверку. Отчёт никуда не уходит, пока вы сами его не отправите.",
     val progress: Float? = null,
@@ -52,7 +57,7 @@ data class UiState(
     val hops: List<HopRow> = emptyList(),
     val pingSummary: PingSummary? = null,
     val speed: SpeedResult? = null,
-    val conclusions: List<String> = emptyList(),
+    val wifi: WifiSurvey? = null,
     val report: String? = null,
     val error: String? = null,
 )
@@ -74,12 +79,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setMaxHops(value: Int) = setNumber { it.copy(maxHops = value.coerceIn(1, 40)) }
     fun setTimeout(value: Int) = setNumber { it.copy(timeoutSec = value.coerceIn(1, 5)) }
     fun setPingCount(value: Int) = setNumber { it.copy(pingCount = value.coerceIn(4, 50)) }
+    fun setIntervalTenths(value: Int) = setNumber { it.copy(intervalTenths = value.coerceIn(1, 50)) }
+    fun setPingSize(value: Int) = setNumber { it.copy(pingSize = value.coerceIn(32, 1472)) }
+    fun setMaxHosts(value: Int) = setNumber { it.copy(maxHosts = value.coerceIn(10, 200)) }
+    fun setResolveNames(value: Boolean) = setNumber { it.copy(resolveNames = value) }
 
     fun runFull() = launch(TestMode.FULL) { draft -> runFull(draft) }
     fun runMtr() = launch(TestMode.MTR) { draft -> runPath(draft, cycles = _state.value.cycles) }
     fun runTrace() = launch(TestMode.TRACE) { draft -> runPath(draft, cycles = 1) }
     fun runPing() = launch(TestMode.PING) { draft -> runPing(draft) }
     fun runSpeed() = launch(TestMode.SPEED) { draft -> runSpeed(draft) }
+    fun runWifi() = launch(TestMode.WIFI) { draft -> runWifiSurvey(draft) }
 
     fun stop() {
         job?.cancel()
@@ -115,10 +125,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 host = host,
                 error = null,
                 report = null,
-                conclusions = emptyList(),
                 hops = emptyList(),
                 pingSummary = null,
                 speed = null,
+                wifi = null,
                 info = emptyList(),
                 progress = null,
                 status = "Запуск…",
@@ -152,6 +162,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         draft.maxHops = settings.maxHops
         draft.timeoutSec = settings.timeoutSec
         captureNetwork(draft)
+        runWifiSurvey(draft)
         _state.update { it.copy(status = "DNS, веб и внешний адрес…") }
         coroutineScope {
             val edgeTask = async { NetChecks.edge() }
@@ -177,7 +188,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (gateway != null) {
             _state.update { it.copy(status = "Пинг шлюза $gateway") }
             try {
-                draft.gatewayPing = ping.pingMany(gateway, count = 10, timeoutSec = settings.timeoutSec) { summary ->
+                draft.gatewayPing = ping.pingMany(gateway, count = 10, timeoutSec = settings.timeoutSec, payloadBytes = settings.pingSize) { summary ->
                     draft.gatewayPing = summary
                     _state.update { it.copy(status = "Пинг шлюза: ${summary.received} ответов") }
                 }
@@ -189,7 +200,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         refreshInfo(draft)
         _state.update { it.copy(status = "Пинг ${draft.host}") }
-        draft.targetPing = ping.pingMany(draft.host, settings.pingCount, settings.timeoutSec) { summary ->
+        draft.targetPing = ping.pingMany(draft.host, settings.pingCount, settings.timeoutSec, settings.pingSize) { summary ->
             _state.update {
                 it.copy(
                     pingSummary = summary,
@@ -214,7 +225,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val settings = _state.value
         draft.timeoutSec = settings.timeoutSec
         captureNetwork(draft)
-        draft.targetPing = ping.pingMany(draft.host, settings.pingCount, settings.timeoutSec) { summary ->
+        draft.targetPing = ping.pingMany(draft.host, settings.pingCount, settings.timeoutSec, settings.pingSize) { summary ->
             _state.update {
                 it.copy(
                     pingSummary = summary,
@@ -222,6 +233,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
         }
+    }
+
+    private suspend fun runWifiSurvey(draft: Draft) {
+        if (draft.network == null) captureNetwork(draft)
+        _state.update { it.copy(status = "Сканирование частот Wi‑Fi…") }
+        val survey = try {
+            WifiSurveyor.collect(getApplication())
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            WifiSurvey.failed(error.message ?: "Не удалось просканировать Wi‑Fi")
+        }
+        draft.wifi = survey
+        _state.update { it.copy(wifi = survey) }
+        refreshInfo(draft)
     }
 
     private suspend fun runSpeed(draft: Draft) {
@@ -239,6 +265,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         draft.cycles = cycles
         draft.maxHops = settings.maxHops
         draft.timeoutSec = settings.timeoutSec
+        draft.intervalSec = settings.intervalTenths / 10.0
+        draft.pingBytes = settings.pingSize
+        draft.hostCache = settings.maxHosts
+        draft.resolveNames = settings.resolveNames
         if (draft.network == null) captureNetwork(draft)
         _state.update { it.copy(status = "Калибровка задержки…", progress = 0f) }
         val hops = mtr.run(
@@ -246,6 +276,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             cycles = cycles,
             maxHops = settings.maxHops,
             timeoutSec = settings.timeoutSec,
+            intervalMs = settings.intervalTenths * 100L,
+            payloadBytes = settings.pingSize,
+            resolveNames = settings.resolveNames,
+            maxHosts = settings.maxHosts,
         ) { progress ->
             val fraction = (
                 (progress.cycle - 1) + progress.ttl.toFloat() / progress.limit.coerceAtLeast(1)
@@ -302,15 +336,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             lines += "Шлюз ${summary.target}: потери ${TextFormat.pct(summary.lossPercent)}, средняя ${TextFormat.msUnit(summary.avgMs)}"
         }
         draft.speed?.let { speed ->
-            lines += if (speed.downloadError == null) {
-                "Загрузка: ${TextFormat.mbps(speed.downloadMbps)}"
-            } else {
-                "Загрузка: ${speed.downloadError}"
-            }
-            lines += if (speed.uploadError == null) {
-                "Отдача: ${TextFormat.mbps(speed.uploadMbps)}"
-            } else {
-                "Отдача: ${speed.uploadError}"
+            lines += "DOWNLOAD Mbps ${TextFormat.mbpsNumber(speed.downloadMbps)} · UPLOAD Mbps ${TextFormat.mbpsNumber(speed.uploadMbps)}"
+            lines += "Ping ms ${TextFormat.latencyMs(speed.pingMs)} · ↓ ${TextFormat.latencyMs(speed.downloadLatencyMs)} · ↑ ${TextFormat.latencyMs(speed.uploadLatencyMs)}"
+        }
+        draft.wifi?.let { survey ->
+            lines += survey.routerLine()
+            if (survey.error == null) {
+                val busy = survey.channels.filter { it.load == "нагружена" }
+                val free = survey.channels.filter { it.band == "2.4 ГГц" && it.load == "свободна" }
+                lines += "Нагружены: ${busy.joinToString { "канал ${it.channel} (${it.band})" }.ifBlank { "нет" }}"
+                lines += "Свободны 2.4 ГГц: ${free.joinToString { it.channel.toString() }.ifBlank { "нет" }}"
             }
         }
         lines += draft.remarks
@@ -323,10 +358,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.update {
             it.copy(
                 report = ReportText.build(result),
-                conclusions = Conclusions.build(result),
                 hops = result.hops.ifEmpty { it.hops },
                 pingSummary = result.targetPing ?: it.pingSummary,
                 speed = result.speed ?: it.speed,
+                wifi = result.wifi ?: it.wifi,
                 info = it.info,
                 error = result.error,
                 progress = 1f,
@@ -366,6 +401,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         var error: String? = null
         val remarks = mutableListOf<String>()
         var speed: SpeedResult? = null
+        var intervalSec: Double? = null
+        var pingBytes: Int? = null
+        var hostCache: Int? = null
+        var resolveNames: Boolean? = null
+        var wifi: WifiSurvey? = null
 
         fun toResult(stopped: Boolean, version: String): TestResult {
             return TestResult(
@@ -393,6 +433,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 error = error,
                 remarks = remarks.toList(),
                 speed = speed,
+                intervalSec = intervalSec,
+                pingBytes = pingBytes,
+                hostCache = hostCache,
+                resolveNames = resolveNames,
+                wifi = wifi,
             )
         }
     }
