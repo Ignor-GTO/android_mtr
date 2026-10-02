@@ -4,10 +4,10 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 object ReportText {
-    private val timeFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss XXX", Locale.US)
+    internal val timeFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss XXX", Locale.US)
 
     fun build(result: TestResult): String = buildString {
-        appendLine("NetMTR — ${result.mode.title} — ${result.host}")
+        appendLine("Spectr IT NetMTR-2 — ${result.mode.title} — ${result.host}")
         appendLine("========================================")
         appendLine("Начало: ${result.startedAt.format(timeFormat)}")
         appendLine("Конец:  ${result.finishedAt.format(timeFormat)}")
@@ -97,6 +97,8 @@ object ReportText {
             }
         }
 
+        result.speed?.let { appendSpeed(it) }
+
         result.gatewayPing?.let { appendPing("Пинг шлюза", it) }
         result.targetPing?.let { appendPing("Пинг цели", it) }
 
@@ -139,6 +141,27 @@ object ReportText {
         appendLine()
         appendLine("Отчёт собран на устройстве. Приложение само никуда его не отправляет.")
     }.trimEnd() + "\n"
+
+    private fun StringBuilder.appendSpeed(speed: SpeedResult) {
+        appendLine()
+        appendLine("Скорость")
+        appendLine("--------")
+        appendLine("Оценка по передаче на Cloudflare, около 8 с загрузки и 6 с отдачи. Это не тариф провайдера.")
+        if (speed.downloadError == null && speed.downloadMbps != null) {
+            appendLine(
+                "Загрузка: ${TextFormat.mbps(speed.downloadMbps)}, ${TextFormat.megabytes(speed.downloadBytes)} за ${TextFormat.seconds(speed.downloadMs)}",
+            )
+        } else {
+            appendLine("Загрузка: ${speed.downloadError ?: "нет данных"}")
+        }
+        if (speed.uploadError == null && speed.uploadMbps != null) {
+            appendLine(
+                "Отдача: ${TextFormat.mbps(speed.uploadMbps)}, ${TextFormat.megabytes(speed.uploadBytes)} за ${TextFormat.seconds(speed.uploadMs)}",
+            )
+        } else {
+            appendLine("Отдача: ${speed.uploadError ?: "нет данных"}")
+        }
+    }
 
     private fun StringBuilder.appendPing(title: String, ping: PingSummary) {
         appendLine()

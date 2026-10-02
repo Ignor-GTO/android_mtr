@@ -3,7 +3,8 @@ package dev.netmtr.app.ui
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -41,6 +42,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
@@ -54,6 +56,8 @@ import dev.netmtr.app.probe.HopRow
 import dev.netmtr.app.probe.PingSummary
 import dev.netmtr.app.probe.TextFormat
 import kotlinx.coroutines.launch
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 private val presets = listOf("8.8.8.8", "1.1.1.1", "9.9.9.9", "dns.google")
 
@@ -64,6 +68,17 @@ fun NetMtrScreen(viewModel: MainViewModel = viewModel()) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val view = LocalView.current
+    val savePdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            try {
+                viewModel.writePdf(uri)
+                snackbar.showSnackbar("PDF сохранён")
+            } catch (error: Exception) {
+                snackbar.showSnackbar(error.message ?: "Не удалось сохранить PDF")
+            }
+        }
+    }
 
     DisposableEffect(state.running) {
         view.keepScreenOn = state.running
@@ -82,7 +97,7 @@ fun NetMtrScreen(viewModel: MainViewModel = viewModel()) {
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("NetMTR", style = MaterialTheme.typography.headlineMedium)
+            Text(stringResource(dev.netmtr.app.R.string.app_name), style = MaterialTheme.typography.headlineMedium)
             Text(
                 "WinMTR, трассировка и пинг. Отчёт можно отправить администратору.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -140,11 +155,18 @@ fun NetMtrScreen(viewModel: MainViewModel = viewModel()) {
                     enabled = !state.running,
                     modifier = Modifier.weight(1f),
                 ) { Text("Трасса") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = viewModel::runPing,
                     enabled = !state.running,
                     modifier = Modifier.weight(1f),
                 ) { Text("Пинг") }
+                OutlinedButton(
+                    onClick = viewModel::runSpeed,
+                    enabled = !state.running,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Скорость") }
             }
             if (state.running) {
                 TextButton(onClick = viewModel::stop, modifier = Modifier.fillMaxWidth()) {
@@ -193,6 +215,33 @@ fun NetMtrScreen(viewModel: MainViewModel = viewModel()) {
                 }
             }
 
+            state.speed?.let { speed ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Скорость", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            if (speed.downloadError == null) {
+                                "Загрузка ${TextFormat.mbps(speed.downloadMbps)}"
+                            } else {
+                                "Загрузка: ${speed.downloadError}"
+                            },
+                        )
+                        Text(
+                            if (speed.uploadError == null) {
+                                "Отдача ${TextFormat.mbps(speed.uploadMbps)}"
+                            } else {
+                                "Отдача: ${speed.uploadError}"
+                            },
+                        )
+                        Text(
+                            "Около 8 секунд загрузки и 6 секунд отдачи.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
             state.pingSummary?.let { summary ->
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -221,15 +270,11 @@ fun NetMtrScreen(viewModel: MainViewModel = viewModel()) {
                 Button(
                     onClick = {
                         val report = state.report ?: return@Button
-                        val send = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_SUBJECT, "NetMTR ${state.host}")
-                            putExtra(Intent.EXTRA_TEXT, report)
-                        }
+                        val telegram = viewModel.telegramText() ?: report
                         try {
-                            context.startActivity(Intent.createChooser(send, "Отправить отчёт администратору"))
+                            shareReport(context, report, telegram, "Spectr IT NetMTR-2 ${state.host}")
                         } catch (_: ActivityNotFoundException) {
-                            scope.launch { snackbar.showSnackbar("Нет приложения, чтобы отправить текст") }
+                            scope.launch { snackbar.showSnackbar("Нет приложения, чтобы отправить отчёт") }
                         }
                     },
                     enabled = state.report != null,
@@ -237,18 +282,32 @@ fun NetMtrScreen(viewModel: MainViewModel = viewModel()) {
                 ) { Text("Отправить") }
                 OutlinedButton(
                     onClick = {
-                        val report = state.report ?: return@OutlinedButton
-                        val clipboard = context.getSystemService(ClipboardManager::class.java)
-                        clipboard.setPrimaryClip(ClipData.newPlainText("NetMTR", report))
-                        scope.launch { snackbar.showSnackbar("Отчёт скопирован") }
+                        val stamp = DateTimeFormatter.ofPattern("yyyyMMdd-HHmm").format(LocalDateTime.now())
+                        val safeHost = state.host.replace(Regex("[^A-Za-z0-9._-]"), "_")
+                        savePdf.launch("SpectrIT-NetMTR-2-$safeHost-$stamp.pdf")
                     },
                     enabled = state.report != null,
                     modifier = Modifier.weight(1f),
-                ) { Text("Копировать") }
+                ) { Text("PDF") }
             }
+            OutlinedButton(
+                onClick = {
+                    val report = state.report ?: return@OutlinedButton
+                    val clipboard = context.getSystemService(ClipboardManager::class.java)
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Spectr IT NetMTR-2", report))
+                    scope.launch { snackbar.showSnackbar("Отчёт скопирован") }
+                },
+                enabled = state.report != null,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Копировать") }
+            Text(
+                "В Telegram таблицы уходят в новом формате: рамка, шапка и выравнивание чисел.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
             Text(
-                "NetMTR ${BuildConfig.VERSION_NAME}. Держите приложение открытым, пока идёт проверка.",
+                "Spectr IT NetMTR-2 ${BuildConfig.VERSION_NAME}. Держите приложение открытым, пока идёт проверка.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

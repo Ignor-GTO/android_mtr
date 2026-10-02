@@ -13,4 +13,9 @@
 *.aab
 app/build/
 *.log
+hs_err_pid*.log
+keystore.properties
+keystore/*.jks
+keystore/*.keystore
+keystore/CREDENTIALS.txt
 .externalNativeBuild

@@ -29,7 +29,7 @@ object NetChecks {
             connectTimeout = 8_000
             readTimeout = 8_000
             requestMethod = "GET"
-            setRequestProperty("User-Agent", "NetMTR/1.0")
+            setRequestProperty("User-Agent", "SpectrIT-NetMTR/2.0")
         }
         val started = System.nanoTime()
         try {
@@ -85,7 +85,7 @@ object NetChecks {
             connectTimeout = 6_000
             readTimeout = 6_000
             requestMethod = "GET"
-            setRequestProperty("User-Agent", "NetMTR/1.0")
+            setRequestProperty("User-Agent", "SpectrIT-NetMTR/2.0")
         }
         try {
             return connection.inputStream.bufferedReader().use { it.readText() }

@@ -13,6 +13,18 @@ object TextFormat {
 
     fun pct(value: Double): String = String.format(Locale.US, "%.1f%%", value)
 
+    fun mbps(value: Double?): String {
+        return if (value == null) "—" else String.format(Locale.US, "%.1f Мбит/с", value)
+    }
+
+    fun megabytes(bytes: Long): String {
+        return String.format(Locale.US, "%.1f МБ", bytes / 1_000_000.0)
+    }
+
+    fun seconds(ms: Long): String {
+        return String.format(Locale.US, "%.1f с", ms / 1000.0)
+    }
+
     fun kbps(value: Int?): String? {
         if (value == null || value <= 0) return null
         return if (value >= 1000) {

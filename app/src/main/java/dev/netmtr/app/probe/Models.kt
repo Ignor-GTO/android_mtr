@@ -7,6 +7,7 @@ enum class TestMode(val title: String) {
     MTR("MTR"),
     TRACE("Трассировка"),
     PING("Пинг"),
+    SPEED("Скорость"),
 }
 
 class ProbeException(message: String) : Exception(message)
@@ -103,6 +104,17 @@ data class EdgeInfo(
     val location: String?,
 )
 
+data class SpeedResult(
+    val downloadMbps: Double?,
+    val downloadBytes: Long,
+    val downloadMs: Long,
+    val uploadMbps: Double?,
+    val uploadBytes: Long,
+    val uploadMs: Long,
+    val downloadError: String?,
+    val uploadError: String?,
+)
+
 data class TestResult(
     val mode: TestMode,
     val startedAt: ZonedDateTime,
@@ -127,6 +139,7 @@ data class TestResult(
     val stopped: Boolean,
     val error: String?,
     val remarks: List<String> = emptyList(),
+    val speed: SpeedResult? = null,
 )
 
 object Rtt {

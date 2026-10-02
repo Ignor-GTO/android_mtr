@@ -17,6 +17,19 @@ object Conclusions {
             notes += "Система не подтвердила доступ в интернет. Возможен портал авторизации Wi‑Fi или обрыв."
         }
 
+        result.speed?.let { speed ->
+            if (speed.downloadError == null && speed.downloadMbps != null && speed.downloadMbps < 5.0) {
+                notes += "Загрузка ${TextFormat.mbps(speed.downloadMbps)}. Для видео и больших файлов этого часто мало."
+            } else if (speed.downloadMbps != null && speed.downloadError == null) {
+                notes += "Загрузка ${TextFormat.mbps(speed.downloadMbps)}, отдача ${TextFormat.mbps(speed.uploadMbps)}."
+            }
+            if (speed.uploadError == null && speed.uploadMbps != null && speed.uploadMbps < 1.0) {
+                notes += "Отдача ${TextFormat.mbps(speed.uploadMbps)}. Исходящий канал узкий: звонки и отправка файлов могут страдать."
+            }
+            speed.downloadError?.let { notes += "Замер загрузки не удался: $it." }
+            speed.uploadError?.let { notes += "Замер отдачи не удался: $it." }
+        }
+
         result.gatewayPing?.let { ping ->
             if (ping.transmitted > 0 && ping.lossPercent >= 5) {
                 notes += "До шлюза ${ping.target} потери ${TextFormat.pct(ping.lossPercent)}. Чаще всего это Wi‑Fi или локальная сеть, а не магистраль провайдера."

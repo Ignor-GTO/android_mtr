@@ -1,6 +1,7 @@
 package dev.netmtr.app
 
 import android.app.Application
+import android.net.Uri
 import android.os.PowerManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -13,13 +14,19 @@ import dev.netmtr.app.probe.MtrEngine
 import dev.netmtr.app.probe.NetChecks
 import dev.netmtr.app.probe.NetworkInfo
 import dev.netmtr.app.probe.NetworkSnapshot
+import dev.netmtr.app.probe.PdfReport
 import dev.netmtr.app.probe.PingClient
 import dev.netmtr.app.probe.PingSummary
+import dev.netmtr.app.probe.ProbeException
 import dev.netmtr.app.probe.ReportText
+import dev.netmtr.app.probe.SpeedResult
+import dev.netmtr.app.probe.SpeedTest
 import dev.netmtr.app.probe.TcpResult
+import dev.netmtr.app.probe.TelegramReport
 import dev.netmtr.app.probe.TestMode
 import dev.netmtr.app.probe.TestResult
 import dev.netmtr.app.probe.TextFormat
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -29,6 +36,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.withContext
 import java.time.ZonedDateTime
 
 data class UiState(
@@ -43,6 +51,7 @@ data class UiState(
     val info: List<String> = emptyList(),
     val hops: List<HopRow> = emptyList(),
     val pingSummary: PingSummary? = null,
+    val speed: SpeedResult? = null,
     val conclusions: List<String> = emptyList(),
     val report: String? = null,
     val error: String? = null,
@@ -54,6 +63,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
     private var job: Job? = null
+    private var lastResult: TestResult? = null
 
     fun setHost(value: String) {
         if (_state.value.running) return
@@ -69,9 +79,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun runMtr() = launch(TestMode.MTR) { draft -> runPath(draft, cycles = _state.value.cycles) }
     fun runTrace() = launch(TestMode.TRACE) { draft -> runPath(draft, cycles = 1) }
     fun runPing() = launch(TestMode.PING) { draft -> runPing(draft) }
+    fun runSpeed() = launch(TestMode.SPEED) { draft -> runSpeed(draft) }
 
     fun stop() {
         job?.cancel()
+    }
+
+    fun telegramText(): String? = lastResult?.let(TelegramReport::build)
+
+    suspend fun writePdf(uri: Uri) {
+        val result = lastResult ?: error("Сначала выполните проверку")
+        withContext(Dispatchers.IO) {
+            val stream = getApplication<Application>().contentResolver.openOutputStream(uri)
+                ?: error("Не удалось открыть файл")
+            stream.use { PdfReport.write(result, it) }
+        }
     }
 
     private fun setNumber(block: (UiState) -> UiState) {
@@ -96,6 +118,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 conclusions = emptyList(),
                 hops = emptyList(),
                 pingSummary = null,
+                speed = null,
                 info = emptyList(),
                 progress = null,
                 status = "Запуск…",
@@ -175,7 +198,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         refreshInfo(draft)
-        runPath(draft, settings.cycles)
+        var pathError: String? = null
+        try {
+            runPath(draft, settings.cycles)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            pathError = error.message ?: "Ошибка трассировки"
+        }
+        runSpeed(draft)
+        if (pathError != null) throw ProbeException(pathError)
     }
 
     private suspend fun runPing(draft: Draft) {
@@ -190,6 +222,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
         }
+    }
+
+    private suspend fun runSpeed(draft: Draft) {
+        if (draft.network == null) captureNetwork(draft)
+        val speed = SpeedTest.measure { status ->
+            _state.update { it.copy(status = status, progress = null) }
+        }
+        draft.speed = speed
+        _state.update { it.copy(speed = speed) }
+        refreshInfo(draft)
     }
 
     private suspend fun runPath(draft: Draft, cycles: Int) {
@@ -259,18 +301,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         draft.gatewayPing?.let { summary ->
             lines += "Шлюз ${summary.target}: потери ${TextFormat.pct(summary.lossPercent)}, средняя ${TextFormat.msUnit(summary.avgMs)}"
         }
+        draft.speed?.let { speed ->
+            lines += if (speed.downloadError == null) {
+                "Загрузка: ${TextFormat.mbps(speed.downloadMbps)}"
+            } else {
+                "Загрузка: ${speed.downloadError}"
+            }
+            lines += if (speed.uploadError == null) {
+                "Отдача: ${TextFormat.mbps(speed.uploadMbps)}"
+            } else {
+                "Отдача: ${speed.uploadError}"
+            }
+        }
         lines += draft.remarks
         _state.update { it.copy(info = lines) }
     }
 
     private fun publish(draft: Draft, stopped: Boolean) {
         val result = draft.toResult(stopped, BuildConfig.VERSION_NAME)
+        lastResult = result
         _state.update {
             it.copy(
                 report = ReportText.build(result),
                 conclusions = Conclusions.build(result),
                 hops = result.hops.ifEmpty { it.hops },
                 pingSummary = result.targetPing ?: it.pingSummary,
+                speed = result.speed ?: it.speed,
                 info = it.info,
                 error = result.error,
                 progress = 1f,
@@ -309,6 +365,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         var overheadApplied: Boolean = false
         var error: String? = null
         val remarks = mutableListOf<String>()
+        var speed: SpeedResult? = null
 
         fun toResult(stopped: Boolean, version: String): TestResult {
             return TestResult(
@@ -335,6 +392,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 stopped = stopped,
                 error = error,
                 remarks = remarks.toList(),
+                speed = speed,
             )
         }
     }

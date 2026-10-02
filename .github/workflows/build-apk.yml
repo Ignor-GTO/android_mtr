@@ -1,4 +1,4 @@
-name: Build APK
+name: Build APK and AAB
 
 on:
   push:
@@ -7,14 +7,14 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: apk-${{ github.ref }}
+  group: android-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  apk:
+  release:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -35,15 +35,37 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Test and build debug APK
+      - name: Prepare signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "Signing secrets are missing"
+            exit 1
+          fi
+          mkdir -p keystore
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > keystore/spectr-upload.jks
+          printf 'storeFile=keystore/spectr-upload.jks\nstorePassword=%s\nkeyAlias=upload\nkeyPassword=%s\n' "$STORE_PASSWORD" "$KEY_PASSWORD" > keystore.properties
+
+      - name: Test and build release APK and AAB
         run: |
           chmod +x ./gradlew
-          ./gradlew testDebugUnitTest assembleDebug --stacktrace
+          ./gradlew testDebugUnitTest assembleRelease bundleRelease --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: NetMTR-${{ github.run_number }}
-          path: app/build/outputs/apk/debug/*.apk
+          name: SpectrIT-NetMTR-2-apk-${{ github.run_number }}
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpectrIT-NetMTR-2-aab-${{ github.run_number }}
+          path: app/build/outputs/bundle/release/*.aab
           if-no-files-found: error
           retention-days: 30
