@@ -40,7 +40,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -59,6 +58,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -134,6 +134,10 @@ fun NetMtrScreen(viewModel: MainViewModel = viewModel()) {
                     FinishedActions(
                         detailsOpen = detailsOpen,
                         onToggleDetails = { detailsOpen = !detailsOpen },
+                        onNewCheck = {
+                            detailsOpen = false
+                            viewModel.newCheck()
+                        },
                         onSend = {
                             val report = state.report ?: return@FinishedActions
                             val telegram = viewModel.telegramText() ?: report
@@ -172,10 +176,6 @@ fun NetMtrScreen(viewModel: MainViewModel = viewModel()) {
                 state.report != null -> {
                     BriefReport(state)
                     if (detailsOpen) FullReport(state)
-                    TextButton(onClick = {
-                        detailsOpen = false
-                        viewModel.newCheck()
-                    }) { Text("Новая проверка") }
                 }
                 else -> SetupForm(
                     state = state,
@@ -225,6 +225,7 @@ private fun RunStatusBar(status: String, progress: Float?) {
 private fun FinishedActions(
     detailsOpen: Boolean,
     onToggleDetails: () -> Unit,
+    onNewCheck: () -> Unit,
     onSend: () -> Unit,
     onSave: () -> Unit,
 ) {
@@ -241,6 +242,12 @@ private fun FinishedActions(
             Button(onClick = onSend, modifier = Modifier.weight(1f)) { Text("Отправить") }
             OutlinedButton(onClick = onSave, modifier = Modifier.weight(1f)) { Text("Сохранить") }
         }
+        Button(
+            onClick = onNewCheck,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
+        ) { Text("Новая проверка") }
     }
 }
 
@@ -278,11 +285,16 @@ private fun SetupForm(
     }
     SettingsSection(
         title = "MTR",
-        summary = "${state.cycles} циклов · интервал ${String.format(java.util.Locale.US, "%.1f", state.intervalTenths / 10.0)} с · ${state.maxHops} прыжков",
+        summary = "${state.cycles} циклов по ${String.format(java.util.Locale.US, "%.1f", state.intervalTenths / 10.0)} с · ${state.maxHops} прыжков",
     ) {
         Stepper("Циклы MTR", state.cycles, 10..200, true, viewModel::setCycles, Modifier.fillMaxWidth(), step = 10)
         Stepper("Прыжки", state.maxHops, 1..40, true, viewModel::setMaxHops, Modifier.fillMaxWidth())
         DecimalStepper("Интервал, с", state.intervalTenths, 1..50, true, viewModel::setIntervalTenths, Modifier.fillMaxWidth())
+        Text(
+            "Один цикл длится этот интервал: каждый прыжок получает один пакет.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Stepper("Размер, байт", state.pingSize, 32..1472, true, viewModel::setPingSize, Modifier.fillMaxWidth(), step = 8)
         Stepper("Кэш хостов", state.maxHosts, 10..200, true, viewModel::setMaxHosts, Modifier.fillMaxWidth(), step = 10)
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -371,31 +383,122 @@ private fun StagePlaceholder(status: String) {
 
 @Composable
 private fun BriefReport(state: dev.netmtr.app.UiState) {
-    Text(state.status, style = MaterialTheme.typography.titleMedium)
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Краткий отчёт · ${state.host}", style = MaterialTheme.typography.titleMedium)
-            state.speed?.let { speed ->
-                Text("DOWNLOAD ${TextFormat.mbpsNumber(speed.downloadMbps)} Mbps")
-                Text("UPLOAD ${TextFormat.mbpsNumber(speed.uploadMbps)} Mbps")
-                Text("Ping ${TextFormat.latencyMs(speed.pingMs)} мс · ↓ ${TextFormat.latencyMs(speed.downloadLatencyMs)} · ↑ ${TextFormat.latencyMs(speed.uploadLatencyMs)}")
-            }
-            state.pingSummary?.let { summary ->
-                Text("Пинг ${summary.target}: потери ${TextFormat.pct(summary.lossPercent)}, средняя ${TextFormat.msUnit(summary.avgMs)}")
-            }
-            state.wifi?.let { survey -> Text(survey.routerLine()) }
-            if (state.hops.isNotEmpty()) {
-                val last = state.hops.lastOrNull { it.received > 0 }
-                val tail = last?.address?.let { " · последний $it" }.orEmpty()
-                Text("Маршрут: ${state.hops.size} прыжков$tail")
-            }
-            state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    Text(state.host, style = MaterialTheme.typography.headlineSmall)
+    Text(
+        state.status,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    state.error?.let { message ->
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+        ) {
             Text(
-                "Кнопка «Отправить» прикладывает PDF.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                message,
+                modifier = Modifier.padding(16.dp),
+                color = MaterialTheme.colorScheme.onErrorContainer,
             )
         }
+    }
+    state.speed?.let { speed -> BriefSpeed(speed) }
+    state.pingSummary?.let { summary ->
+        SectionCard("Пинг ${summary.target}") {
+            StatRow(summary)
+        }
+    }
+    state.wifi?.let { survey -> BriefWifi(survey) }
+    if (state.hops.isNotEmpty()) BriefRoute(state.hops)
+}
+
+@Composable
+private fun SectionCard(title: String, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            content()
+        }
+    }
+}
+
+@Composable
+private fun BriefSpeed(speed: SpeedResult) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF171A1F)),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text("Скорость", color = Color.White, style = MaterialTheme.typography.titleMedium)
+            Row(Modifier.fillMaxWidth()) {
+                Metric("Загрузка Mbps", TextFormat.mbpsNumber(speed.downloadMbps), Color(0xFF3DDC97), Modifier.weight(1f), labelColor = Color(0xFF9AA0A6))
+                Metric("Отдача Mbps", TextFormat.mbpsNumber(speed.uploadMbps), Color(0xFFC084FC), Modifier.weight(1f), labelColor = Color(0xFF9AA0A6))
+            }
+            Row(Modifier.fillMaxWidth()) {
+                Metric("Пинг мс", TextFormat.latencyMs(speed.pingMs), Color(0xFFF5C518), Modifier.weight(1f), labelColor = Color(0xFF9AA0A6))
+                Metric("↓ мс", TextFormat.latencyMs(speed.downloadLatencyMs), Color(0xFF2EC4B6), Modifier.weight(1f), labelColor = Color(0xFF9AA0A6))
+                Metric("↑ мс", TextFormat.latencyMs(speed.uploadLatencyMs), Color(0xFFB388FF), Modifier.weight(1f), labelColor = Color(0xFF9AA0A6))
+            }
+        }
+    }
+}
+
+@Composable
+private fun BriefWifi(survey: WifiSurvey) {
+    SectionCard("Wi‑Fi") {
+        when {
+            survey.error != null -> Text(survey.error, color = MaterialTheme.colorScheme.error)
+            survey.connectedFrequencyMhz == null -> Text("Телефон не подключён к Wi‑Fi.")
+            else -> {
+                Text(survey.connectedSsid ?: "Скрытая сеть", style = MaterialTheme.typography.titleSmall)
+                Row(Modifier.fillMaxWidth()) {
+                    Metric("МГц", survey.connectedFrequencyMhz.toString(), modifier = Modifier.weight(1f))
+                    Metric("Канал", survey.connectedChannel?.toString() ?: "—", modifier = Modifier.weight(1f))
+                    Metric("Диапазон", survey.connectedBand ?: "—", modifier = Modifier.weight(1f))
+                }
+                val busy = survey.channels.count { it.load == "нагружена" }
+                val free = survey.channels.count { it.band == "2.4 ГГц" && it.load == "свободна" }
+                Row(Modifier.fillMaxWidth()) {
+                    Metric("Нагружены", busy.toString(), modifier = Modifier.weight(1f))
+                    Metric("Свободны 2.4", free.toString(), modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BriefRoute(hops: List<HopRow>) {
+    val last = hops.lastOrNull { it.received > 0 }
+    SectionCard("Маршрут") {
+        Row(Modifier.fillMaxWidth()) {
+            Metric("Прыжков", hops.size.toString(), modifier = Modifier.weight(1f))
+            Metric("Последний", last?.address ?: "—", modifier = Modifier.weight(1.4f))
+            Metric("Потери", last?.let { TextFormat.pct(it.lossPercent) } ?: "—", modifier = Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun Metric(
+    label: String,
+    value: String,
+    valueColor: Color? = null,
+    modifier: Modifier = Modifier,
+    labelColor: Color? = null,
+) {
+    Column(modifier) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = labelColor ?: MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            value,
+            color = valueColor ?: MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.titleLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

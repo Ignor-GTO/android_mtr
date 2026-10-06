@@ -1,6 +1,9 @@
 package dev.netmtr.app.probe
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -30,51 +33,99 @@ class MtrEngine(private val ping: PingClient) {
         ping.calibrate()
         val names = HostCache(maxHosts.coerceAtLeast(1))
         val slots = linkedMapOf<Int, Slot>()
-        var destinationTtl: Int? = null
+        var pathLimit: Int? = null
         for (cycle in 1..cycles) {
             coroutineContext.ensureActive()
-            val limit = destinationTtl ?: maxHops
-            var trailingStars = 0
-            for (ttl in 1..limit) {
-                coroutineContext.ensureActive()
-                onUpdate(MtrProgress(cycle, cycles, ttl, limit, slots.rows()))
-                val started = System.nanoTime()
-                val probe = ping.probe(host, ttl, timeoutSec, payloadBytes = payloadBytes, numeric = !resolveNames)
-                if (probe is Probe.Failure) throw ProbeException(probe.message)
-                val slot = slots.getOrPut(ttl) { Slot(ttl) }
-                slot.sent++
-                var stopHop = false
-                when (probe) {
-                    is Probe.Echo -> {
-                        slot.hear(names.label(probe.address, resolveNames), probe.rttMs, reachedTarget = true)
-                        destinationTtl = ttl
-                        trailingStars = 0
-                        stopHop = true
-                    }
-                    is Probe.Transit -> {
-                        slot.hear(names.label(probe.address, resolveNames), probe.rttMs, reachedTarget = false)
-                        trailingStars = 0
-                    }
-                    is Probe.Unreachable -> {
-                        slot.hear(names.label(probe.address, resolveNames), probe.rttMs, reachedTarget = false)
-                        stopHop = true
-                    }
-                    Probe.Timeout -> {
-                        trailingStars++
-                        if (destinationTtl == null && trailingStars >= STAR_LIMIT && ttl >= STAR_LIMIT) {
-                            stopHop = true
-                        }
-                    }
-                    is Probe.Failure -> Unit
+            val cycleStarted = System.nanoTime()
+            val limit = pathLimit ?: maxHops
+            onUpdate(MtrProgress(cycle, cycles, 1, limit, slots.rows()))
+            if (pathLimit == null) {
+                pathLimit = discover(host, limit, timeoutSec, payloadBytes, resolveNames, names, slots) { ttl ->
+                    onUpdate(MtrProgress(cycle, cycles, ttl, limit, slots.rows()))
                 }
-                onUpdate(MtrProgress(cycle, cycles, ttl, limit, slots.rows()))
-                val spent = (System.nanoTime() - started) / 1_000_000
-                val wait = intervalMs - spent
-                if (wait > 0) delay(wait)
-                if (stopHop) break
+            } else {
+                val probes = coroutineScope {
+                    (1..limit).map { ttl ->
+                        async {
+                            coroutineContext.ensureActive()
+                            ttl to ping.probe(
+                                host,
+                                ttl,
+                                timeoutSec,
+                                payloadBytes = payloadBytes,
+                                numeric = !resolveNames,
+                            )
+                        }
+                    }.awaitAll()
+                }
+                for ((ttl, probe) in probes) {
+                    hear(slots, names, ttl, probe, resolveNames)
+                }
+                onUpdate(MtrProgress(cycle, cycles, limit, limit, slots.rows()))
             }
+            val spent = (System.nanoTime() - cycleStarted) / 1_000_000
+            val wait = intervalMs - spent
+            if (wait > 0) delay(wait)
         }
         return slots.rows()
+    }
+
+    private suspend fun discover(
+        host: String,
+        limit: Int,
+        timeoutSec: Int,
+        payloadBytes: Int,
+        resolveNames: Boolean,
+        names: HostCache,
+        slots: MutableMap<Int, Slot>,
+        onHop: (Int) -> Unit,
+    ): Int {
+        var trailingStars = 0
+        var lastTtl = 1
+        for (ttl in 1..limit) {
+            coroutineContext.ensureActive()
+            lastTtl = ttl
+            onHop(ttl)
+            val probe = ping.probe(host, ttl, timeoutSec, payloadBytes = payloadBytes, numeric = !resolveNames)
+            when (hear(slots, names, ttl, probe, resolveNames)) {
+                Heard.Destination, Heard.Unreachable -> return ttl
+                Heard.Timeout -> {
+                    trailingStars++
+                    if (trailingStars >= STAR_LIMIT && ttl >= STAR_LIMIT) return ttl
+                }
+                Heard.Transit -> trailingStars = 0
+            }
+            onHop(ttl)
+        }
+        return lastTtl
+    }
+
+    private suspend fun hear(
+        slots: MutableMap<Int, Slot>,
+        names: HostCache,
+        ttl: Int,
+        probe: Probe,
+        resolveNames: Boolean,
+    ): Heard {
+        if (probe is Probe.Failure) throw ProbeException(probe.message)
+        val slot = slots.getOrPut(ttl) { Slot(ttl) }
+        slot.sent++
+        return when (probe) {
+            is Probe.Echo -> {
+                slot.hear(names.label(probe.address, resolveNames), probe.rttMs, reachedTarget = true)
+                Heard.Destination
+            }
+            is Probe.Transit -> {
+                slot.hear(names.label(probe.address, resolveNames), probe.rttMs, reachedTarget = false)
+                Heard.Transit
+            }
+            is Probe.Unreachable -> {
+                slot.hear(names.label(probe.address, resolveNames), probe.rttMs, reachedTarget = false)
+                Heard.Unreachable
+            }
+            Probe.Timeout -> Heard.Timeout
+            is Probe.Failure -> Heard.Timeout
+        }
     }
 
     private class Slot(val hop: Int) {
@@ -140,6 +191,13 @@ class MtrEngine(private val ping: PingClient) {
             }
             return name
         }
+    }
+
+    private sealed interface Heard {
+        data object Destination : Heard
+        data object Unreachable : Heard
+        data object Timeout : Heard
+        data object Transit : Heard
     }
 
     companion object {
