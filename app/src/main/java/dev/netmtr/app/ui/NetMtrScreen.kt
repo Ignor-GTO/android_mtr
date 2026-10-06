@@ -2,8 +2,6 @@ package dev.netmtr.app.ui
 
 import android.Manifest
 import android.content.ActivityNotFoundException
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
@@ -11,12 +9,12 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -66,6 +64,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.netmtr.app.BuildConfig
 import dev.netmtr.app.MainViewModel
+import dev.netmtr.app.RunPhase
 import dev.netmtr.app.probe.ChannelLoad
 import dev.netmtr.app.probe.HopRow
 import dev.netmtr.app.probe.PingSummary
@@ -86,6 +85,7 @@ fun NetMtrScreen(viewModel: MainViewModel = viewModel()) {
     val context = LocalContext.current
     val view = LocalView.current
     var pendingWifiAction by remember { mutableStateOf("") }
+    var detailsOpen by remember { mutableStateOf(false) }
     val askWifi = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         when (pendingWifiAction) {
             "full" -> viewModel.runFull()
@@ -112,6 +112,48 @@ fun NetMtrScreen(viewModel: MainViewModel = viewModel()) {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            if (state.running) {
+                RunStatusBar(state.status, state.progress)
+            }
+        },
+        bottomBar = {
+            when {
+                state.running -> {
+                    Button(
+                        onClick = viewModel::stop,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                    ) { Text("Остановить") }
+                }
+                state.report != null -> {
+                    FinishedActions(
+                        detailsOpen = detailsOpen,
+                        onToggleDetails = { detailsOpen = !detailsOpen },
+                        onSend = {
+                            val report = state.report ?: return@FinishedActions
+                            val telegram = viewModel.telegramText() ?: report
+                            scope.launch {
+                                try {
+                                    val pdf = viewModel.sharePdfUri()
+                                    shareReport(context, report, telegram, "Spectr IT NetMTR-2 ${state.host}", pdf)
+                                } catch (_: ActivityNotFoundException) {
+                                    snackbar.showSnackbar("Нет приложения, чтобы отправить отчёт")
+                                } catch (error: Exception) {
+                                    snackbar.showSnackbar(error.message ?: "Не удалось отправить PDF")
+                                }
+                            }
+                        },
+                        onSave = {
+                            val stamp = DateTimeFormatter.ofPattern("yyyyMMdd-HHmm").format(LocalDateTime.now())
+                            val safeHost = state.host.replace(Regex("[^A-Za-z0-9._-]"), "_")
+                            savePdf.launch("SpectrIT-NetMTR-2-$safeHost-$stamp.pdf")
+                        },
+                    )
+                }
+            }
+        },
     ) { padding ->
         Column(
             modifier = Modifier
@@ -121,233 +163,279 @@ fun NetMtrScreen(viewModel: MainViewModel = viewModel()) {
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(stringResource(dev.netmtr.app.R.string.app_name), style = MaterialTheme.typography.headlineMedium)
-            Text(
-                "WinMTR, трассировка и пинг. Отчёт можно отправить администратору.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            OutlinedTextField(
-                value = state.host,
-                onValueChange = viewModel::setHost,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !state.running,
-                singleLine = true,
-                label = { Text("Адрес или IP") },
-            )
-            Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                presets.forEach { preset ->
-                    FilterChip(
-                        selected = state.host == preset,
-                        onClick = { viewModel.setHost(preset) },
-                        enabled = !state.running,
-                        label = { Text(preset) },
-                    )
+            when {
+                state.running -> LiveStage(state)
+                state.report != null -> {
+                    BriefReport(state)
+                    if (detailsOpen) FullReport(state)
+                    TextButton(onClick = {
+                        detailsOpen = false
+                        viewModel.newCheck()
+                    }) { Text("Новая проверка") }
                 }
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Stepper("Циклы MTR", state.cycles, 1..30, !state.running, viewModel::setCycles, Modifier.weight(1f))
-                Stepper("Пингов", state.pingCount, 4..50, !state.running, viewModel::setPingCount, Modifier.weight(1f))
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Stepper("Прыжки", state.maxHops, 1..40, !state.running, viewModel::setMaxHops, Modifier.weight(1f))
-                Stepper("Таймаут, с", state.timeoutSec, 1..5, !state.running, viewModel::setTimeout, Modifier.weight(1f))
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DecimalStepper(
-                    "Интервал, с",
-                    state.intervalTenths,
-                    1..50,
-                    !state.running,
-                    viewModel::setIntervalTenths,
-                    Modifier.weight(1f),
+                else -> SetupForm(
+                    state = state,
+                    viewModel = viewModel,
+                    onFull = {
+                        if (hasWifiPermission(context)) {
+                            viewModel.runFull()
+                        } else {
+                            pendingWifiAction = "full"
+                            askWifi.launch(wifiPermissions())
+                        }
+                    },
+                    onWifi = {
+                        if (hasWifiPermission(context)) {
+                            viewModel.runWifi()
+                        } else {
+                            pendingWifiAction = "wifi"
+                            askWifi.launch(wifiPermissions())
+                        }
+                    },
                 )
-                Stepper("Размер, байт", state.pingSize, 32..1472, !state.running, viewModel::setPingSize, Modifier.weight(1f), step = 8)
             }
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Stepper("Кэш хостов", state.maxHosts, 10..200, !state.running, viewModel::setMaxHosts, Modifier.weight(1f), step = 10)
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Checkbox(
-                        checked = state.resolveNames,
-                        onCheckedChange = viewModel::setResolveNames,
-                        enabled = !state.running,
-                    )
-                    Text("Определять имена")
-                }
-            }
+        }
+    }
+}
 
-            Button(
-                onClick = {
-                    if (hasWifiPermission(context)) {
-                        viewModel.runFull()
-                    } else {
-                        pendingWifiAction = "full"
-                        askWifi.launch(wifiPermissions())
-                    }
-                },
-                enabled = !state.running,
+@Composable
+private fun RunStatusBar(status: String, progress: Float?) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(status, style = MaterialTheme.typography.titleMedium)
+        if (progress == null) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        } else {
+            LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+@Composable
+private fun FinishedActions(
+    detailsOpen: Boolean,
+    onToggleDetails: () -> Unit,
+    onSend: () -> Unit,
+    onSave: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OutlinedButton(onClick = onToggleDetails, modifier = Modifier.fillMaxWidth()) {
+            Text(if (detailsOpen) "Свернуть" else "Посмотреть развёрнуто")
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onSend, modifier = Modifier.weight(1f)) { Text("Отправить") }
+            OutlinedButton(onClick = onSave, modifier = Modifier.weight(1f)) { Text("Сохранить") }
+        }
+    }
+}
+
+@Composable
+private fun SetupForm(
+    state: dev.netmtr.app.UiState,
+    viewModel: MainViewModel,
+    onFull: () -> Unit,
+    onWifi: () -> Unit,
+) {
+    Text(stringResource(dev.netmtr.app.R.string.app_name), style = MaterialTheme.typography.headlineMedium)
+    Text(
+        "WinMTR, трассировка и пинг. Отчёт можно отправить администратору.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    OutlinedTextField(
+        value = state.host,
+        onValueChange = viewModel::setHost,
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        label = { Text("Адрес или IP") },
+    )
+    Row(
+        modifier = Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        presets.forEach { preset ->
+            FilterChip(
+                selected = state.host == preset,
+                onClick = { viewModel.setHost(preset) },
+                label = { Text(preset) },
+            )
+        }
+    }
+    SettingsSection(
+        title = "MTR",
+        summary = "${state.cycles} циклов · интервал ${String.format(java.util.Locale.US, "%.1f", state.intervalTenths / 10.0)} с · ${state.maxHops} прыжков",
+    ) {
+        Stepper("Циклы MTR", state.cycles, 10..200, true, viewModel::setCycles, Modifier.fillMaxWidth(), step = 10)
+        Stepper("Прыжки", state.maxHops, 1..40, true, viewModel::setMaxHops, Modifier.fillMaxWidth())
+        DecimalStepper("Интервал, с", state.intervalTenths, 1..50, true, viewModel::setIntervalTenths, Modifier.fillMaxWidth())
+        Stepper("Размер, байт", state.pingSize, 32..1472, true, viewModel::setPingSize, Modifier.fillMaxWidth(), step = 8)
+        Stepper("Кэш хостов", state.maxHosts, 10..200, true, viewModel::setMaxHosts, Modifier.fillMaxWidth(), step = 10)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = state.resolveNames, onCheckedChange = viewModel::setResolveNames)
+            Text("Определять имена")
+        }
+    }
+    SettingsSection(
+        title = "Пинг",
+        summary = "${state.pingCount} пакетов · таймаут ${state.timeoutSec} с",
+    ) {
+        Stepper("Пингов", state.pingCount, 1..50, true, viewModel::setPingCount, Modifier.fillMaxWidth())
+        Stepper("Таймаут, с", state.timeoutSec, 1..5, true, viewModel::setTimeout, Modifier.fillMaxWidth())
+    }
+    Button(
+        onClick = onFull,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(52.dp),
+    ) { Text("Полная проверка") }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = viewModel::runMtr, modifier = Modifier.weight(1f)) { Text("MTR") }
+        OutlinedButton(onClick = viewModel::runTrace, modifier = Modifier.weight(1f)) { Text("Трасса") }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = viewModel::runPing, modifier = Modifier.weight(1f)) { Text("Пинг") }
+        OutlinedButton(onClick = viewModel::runSpeed, modifier = Modifier.weight(1f)) { Text("Скорость") }
+    }
+    OutlinedButton(onClick = onWifi, modifier = Modifier.fillMaxWidth()) { Text("Частоты Wi‑Fi") }
+    Text(
+        "Spectr IT NetMTR-2 ${BuildConfig.VERSION_NAME}. Держите приложение открытым, пока идёт проверка.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun SettingsSection(
+    title: String,
+    summary: String,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .clickable { open = !open },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Полная проверка")
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = viewModel::runMtr,
-                    enabled = !state.running,
-                    modifier = Modifier.weight(1f),
-                ) { Text("MTR") }
-                OutlinedButton(
-                    onClick = viewModel::runTrace,
-                    enabled = !state.running,
-                    modifier = Modifier.weight(1f),
-                ) { Text("Трасса") }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = viewModel::runPing,
-                    enabled = !state.running,
-                    modifier = Modifier.weight(1f),
-                ) { Text("Пинг") }
-                OutlinedButton(
-                    onClick = viewModel::runSpeed,
-                    enabled = !state.running,
-                    modifier = Modifier.weight(1f),
-                ) { Text("Скорость") }
-            }
-            OutlinedButton(
-                onClick = {
-                    if (hasWifiPermission(context)) {
-                        viewModel.runWifi()
-                    } else {
-                        pendingWifiAction = "wifi"
-                        askWifi.launch(wifiPermissions())
-                    }
-                },
-                enabled = !state.running,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Частоты Wi‑Fi") }
-            if (state.running) {
-                TextButton(onClick = viewModel::stop, modifier = Modifier.fillMaxWidth()) {
-                    Text("Остановить")
-                }
-            }
-
-            Text(state.status, style = MaterialTheme.typography.bodyMedium)
-            if (state.running || state.progress != null) {
-                val progress = state.progress
-                if (progress == null) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                } else {
-                    LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
-                }
-            }
-
-            if (state.error != null && state.report == null) {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        state.error.orEmpty(),
-                        modifier = Modifier.padding(16.dp),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            }
-
-            if (state.info.isNotEmpty()) {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        state.info.forEach { line ->
-                            Text(line, style = MaterialTheme.typography.bodyMedium)
-                        }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(title, style = MaterialTheme.typography.titleMedium)
+                    if (!open) {
+                        Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
+                Text(if (open) "▾" else "▸", style = MaterialTheme.typography.titleMedium)
             }
+            if (open) content()
+        }
+    }
+}
 
-            state.speed?.let { speed -> SpeedCard(speed) }
-            state.wifi?.let { survey -> WifiCard(survey) }
+@Composable
+private fun LiveStage(state: dev.netmtr.app.UiState) {
+    when (state.phase) {
+        RunPhase.WIFI -> state.wifi?.let { WifiCard(it) } ?: StagePlaceholder(state.status)
+        RunPhase.GATEWAY, RunPhase.PING -> state.pingSummary?.let { PingCard(it) } ?: StagePlaceholder(state.status)
+        RunPhase.MTR -> if (state.hops.isNotEmpty()) HopCard(state.hops) else StagePlaceholder(state.status)
+        RunPhase.SPEED -> state.speed?.let { SpeedCard(it) } ?: StagePlaceholder(state.status)
+        RunPhase.NETWORK, RunPhase.EDGE -> {
+            if (state.info.isNotEmpty()) InfoCard(state.info) else StagePlaceholder(state.status)
+        }
+        RunPhase.IDLE -> StagePlaceholder(state.status)
+    }
+}
 
+@Composable
+private fun StagePlaceholder(status: String) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Text(status, modifier = Modifier.padding(20.dp), style = MaterialTheme.typography.titleMedium)
+    }
+}
+
+@Composable
+private fun BriefReport(state: dev.netmtr.app.UiState) {
+    Text(state.status, style = MaterialTheme.typography.titleMedium)
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Краткий отчёт · ${state.host}", style = MaterialTheme.typography.titleMedium)
+            state.speed?.let { speed ->
+                Text("DOWNLOAD ${TextFormat.mbpsNumber(speed.downloadMbps)} Mbps")
+                Text("UPLOAD ${TextFormat.mbpsNumber(speed.uploadMbps)} Mbps")
+                Text("Ping ${TextFormat.latencyMs(speed.pingMs)} мс · ↓ ${TextFormat.latencyMs(speed.downloadLatencyMs)} · ↑ ${TextFormat.latencyMs(speed.uploadLatencyMs)}")
+            }
             state.pingSummary?.let { summary ->
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Пинг ${summary.target}", style = MaterialTheme.typography.titleMedium)
-                        StatRow(summary)
-                        LatencyBars(summary.samples, MaterialTheme.colorScheme.primary)
-                    }
-                }
+                Text("Пинг ${summary.target}: потери ${TextFormat.pct(summary.lossPercent)}, средняя ${TextFormat.msUnit(summary.avgMs)}")
             }
-
+            state.wifi?.let { survey -> Text(survey.routerLine()) }
             if (state.hops.isNotEmpty()) {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Маршрут", style = MaterialTheme.typography.titleMedium)
-                        HopTable(state.hops)
-                        Text(
-                            "Молчащий промежуточный прыжок при живых следующих узлах обычно фильтрует ICMP, а не обрывает канал.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
+                val last = state.hops.lastOrNull { it.received > 0 }
+                val tail = last?.address?.let { " · последний $it" }.orEmpty()
+                Text("Маршрут: ${state.hops.size} прыжков$tail")
             }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = {
-                        val report = state.report ?: return@Button
-                        val telegram = viewModel.telegramText() ?: report
-                        try {
-                            shareReport(context, report, telegram, "Spectr IT NetMTR-2 ${state.host}")
-                        } catch (_: ActivityNotFoundException) {
-                            scope.launch { snackbar.showSnackbar("Нет приложения, чтобы отправить отчёт") }
-                        }
-                    },
-                    enabled = state.report != null,
-                    modifier = Modifier.weight(1f),
-                ) { Text("Отправить") }
-                OutlinedButton(
-                    onClick = {
-                        val stamp = DateTimeFormatter.ofPattern("yyyyMMdd-HHmm").format(LocalDateTime.now())
-                        val safeHost = state.host.replace(Regex("[^A-Za-z0-9._-]"), "_")
-                        savePdf.launch("SpectrIT-NetMTR-2-$safeHost-$stamp.pdf")
-                    },
-                    enabled = state.report != null,
-                    modifier = Modifier.weight(1f),
-                ) { Text("PDF") }
-            }
-            OutlinedButton(
-                onClick = {
-                    val report = state.report ?: return@OutlinedButton
-                    val clipboard = context.getSystemService(ClipboardManager::class.java)
-                    clipboard.setPrimaryClip(ClipData.newPlainText("Spectr IT NetMTR-2", report))
-                    scope.launch { snackbar.showSnackbar("Отчёт скопирован") }
-                },
-                enabled = state.report != null,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Копировать") }
+            state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Text(
-                "В Telegram таблицы уходят в новом формате: рамка, шапка и выравнивание чисел.",
+                "Кнопка «Отправить» прикладывает PDF.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
 
+@Composable
+private fun FullReport(state: dev.netmtr.app.UiState) {
+    if (state.info.isNotEmpty()) InfoCard(state.info)
+    state.speed?.let { SpeedCard(it) }
+    state.wifi?.let { WifiCard(it) }
+    state.pingSummary?.let { PingCard(it) }
+    if (state.hops.isNotEmpty()) HopCard(state.hops)
+}
+
+@Composable
+private fun InfoCard(lines: List<String>) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            lines.forEach { line ->
+                Text(line, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PingCard(summary: PingSummary) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Пинг ${summary.target}", style = MaterialTheme.typography.titleMedium)
+            StatRow(summary)
+            LatencyBars(summary.samples, MaterialTheme.colorScheme.primary)
+        }
+    }
+}
+
+@Composable
+private fun HopCard(hops: List<HopRow>) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Маршрут", style = MaterialTheme.typography.titleMedium)
+            HopTable(hops)
             Text(
-                "Spectr IT NetMTR-2 ${BuildConfig.VERSION_NAME}. Держите приложение открытым, пока идёт проверка.",
+                "Молчащий промежуточный прыжок при живых следующих узлах обычно фильтрует ICMP, а не обрывает канал.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(8.dp))
         }
     }
 }
@@ -371,7 +459,7 @@ private fun Stepper(
             ) { Text("−") }
             Text(
                 value.toString(),
-                modifier = Modifier.width(48.dp),
+                modifier = Modifier.width(64.dp),
                 textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.titleMedium,
             )
@@ -401,7 +489,7 @@ private fun DecimalStepper(
             ) { Text("−") }
             Text(
                 String.format(java.util.Locale.US, "%.1f", tenths / 10.0),
-                modifier = Modifier.width(48.dp),
+                modifier = Modifier.width(64.dp),
                 textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.titleMedium,
             )

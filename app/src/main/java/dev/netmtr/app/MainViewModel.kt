@@ -40,12 +40,23 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import java.time.ZonedDateTime
 
+enum class RunPhase {
+    IDLE,
+    NETWORK,
+    WIFI,
+    EDGE,
+    GATEWAY,
+    PING,
+    MTR,
+    SPEED,
+}
+
 data class UiState(
     val host: String = "8.8.8.8",
-    val cycles: Int = 10,
+    val cycles: Int = 100,
     val maxHops: Int = 20,
     val timeoutSec: Int = 2,
-    val pingCount: Int = 20,
+    val pingCount: Int = 10,
     val intervalTenths: Int = 10,
     val pingSize: Int = 64,
     val maxHosts: Int = 60,
@@ -60,6 +71,7 @@ data class UiState(
     val wifi: WifiSurvey? = null,
     val report: String? = null,
     val error: String? = null,
+    val phase: RunPhase = RunPhase.IDLE,
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -75,10 +87,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(host = value.take(253)) }
     }
 
-    fun setCycles(value: Int) = setNumber { it.copy(cycles = value.coerceIn(1, 30)) }
+    fun setCycles(value: Int) = setNumber { it.copy(cycles = value.coerceIn(10, 200)) }
     fun setMaxHops(value: Int) = setNumber { it.copy(maxHops = value.coerceIn(1, 40)) }
     fun setTimeout(value: Int) = setNumber { it.copy(timeoutSec = value.coerceIn(1, 5)) }
-    fun setPingCount(value: Int) = setNumber { it.copy(pingCount = value.coerceIn(4, 50)) }
+    fun setPingCount(value: Int) = setNumber { it.copy(pingCount = value.coerceIn(1, 50)) }
     fun setIntervalTenths(value: Int) = setNumber { it.copy(intervalTenths = value.coerceIn(1, 50)) }
     fun setPingSize(value: Int) = setNumber { it.copy(pingSize = value.coerceIn(32, 1472)) }
     fun setMaxHosts(value: Int) = setNumber { it.copy(maxHosts = value.coerceIn(10, 200)) }
@@ -95,6 +107,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         job?.cancel()
     }
 
+    fun newCheck() {
+        if (_state.value.running) return
+        lastResult = null
+        _state.update {
+            it.copy(
+                report = null,
+                hops = emptyList(),
+                pingSummary = null,
+                speed = null,
+                wifi = null,
+                info = emptyList(),
+                error = null,
+                progress = null,
+                phase = RunPhase.IDLE,
+                status = "Укажите адрес и запустите проверку. Отчёт никуда не уходит, пока вы сами его не отправите.",
+            )
+        }
+    }
+
     fun telegramText(): String? = lastResult?.let(TelegramReport::build)
 
     suspend fun writePdf(uri: Uri) {
@@ -104,6 +135,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 ?: error("Не удалось открыть файл")
             stream.use { PdfReport.write(result, it) }
         }
+    }
+
+    suspend fun sharePdfUri(): Uri = withContext(Dispatchers.IO) {
+        val result = lastResult ?: error("Сначала выполните проверку")
+        val app = getApplication<Application>()
+        val dir = java.io.File(app.cacheDir, "reports").apply { mkdirs() }
+        val file = java.io.File(dir, "SpectrIT-NetMTR-2.pdf")
+        file.outputStream().use { PdfReport.write(result, it) }
+        androidx.core.content.FileProvider.getUriForFile(app, "${app.packageName}.files", file)
     }
 
     private fun setNumber(block: (UiState) -> UiState) {
@@ -131,6 +171,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 wifi = null,
                 info = emptyList(),
                 progress = null,
+                phase = when (mode) {
+                    TestMode.WIFI -> RunPhase.WIFI
+                    TestMode.MTR, TestMode.TRACE -> RunPhase.MTR
+                    TestMode.SPEED -> RunPhase.SPEED
+                    else -> RunPhase.NETWORK
+                },
                 status = "Запуск…",
             )
         }
@@ -139,7 +185,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val lock = wakeLock()
             var held = false
             try {
-                lock.acquire(20 * 60 * 1000L)
+                lock.acquire(90 * 60 * 1000L)
                 held = true
                 block(draft)
                 publish(draft, stopped = false)
@@ -161,9 +207,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         draft.cycles = settings.cycles
         draft.maxHops = settings.maxHops
         draft.timeoutSec = settings.timeoutSec
+        _state.update { it.copy(phase = RunPhase.NETWORK, status = "Сеть…") }
         captureNetwork(draft)
         runWifiSurvey(draft)
-        _state.update { it.copy(status = "DNS, веб и внешний адрес…") }
+        _state.update { it.copy(phase = RunPhase.EDGE, status = "DNS, веб и внешний адрес…", progress = null) }
         coroutineScope {
             val edgeTask = async { NetChecks.edge() }
             val names = buildList {
@@ -186,11 +233,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         val gateway = draft.network?.gateway
         if (gateway != null) {
-            _state.update { it.copy(status = "Пинг шлюза $gateway") }
+            _state.update { it.copy(phase = RunPhase.GATEWAY, progress = 0f, status = "Пинг шлюза $gateway") }
             try {
-                draft.gatewayPing = ping.pingMany(gateway, count = 10, timeoutSec = settings.timeoutSec, payloadBytes = settings.pingSize) { summary ->
+                draft.gatewayPing = ping.pingMany(gateway, count = settings.pingCount, timeoutSec = settings.timeoutSec, payloadBytes = settings.pingSize) { summary ->
                     draft.gatewayPing = summary
-                    _state.update { it.copy(status = "Пинг шлюза: ${summary.received} ответов") }
+                    _state.update {
+                        it.copy(
+                            pingSummary = summary,
+                            phase = RunPhase.GATEWAY,
+                            progress = (summary.transmitted.toFloat() / settings.pingCount.coerceAtLeast(1)).coerceIn(0f, 1f),
+                            status = "Пинг шлюза: ${summary.received} из ${summary.transmitted}",
+                        )
+                    }
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -199,11 +253,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         refreshInfo(draft)
-        _state.update { it.copy(status = "Пинг ${draft.host}") }
+        _state.update { it.copy(phase = RunPhase.PING, progress = 0f, pingSummary = null, status = "Пинг ${draft.host}") }
         draft.targetPing = ping.pingMany(draft.host, settings.pingCount, settings.timeoutSec, settings.pingSize) { summary ->
             _state.update {
                 it.copy(
                     pingSummary = summary,
+                    phase = RunPhase.PING,
+                    progress = (summary.transmitted.toFloat() / settings.pingCount.coerceAtLeast(1)).coerceIn(0f, 1f),
                     status = "Пинг цели: ${summary.received} из ${summary.transmitted}",
                 )
             }
@@ -225,10 +281,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val settings = _state.value
         draft.timeoutSec = settings.timeoutSec
         captureNetwork(draft)
+        _state.update { it.copy(phase = RunPhase.PING, progress = 0f, status = "Пинг ${draft.host}") }
         draft.targetPing = ping.pingMany(draft.host, settings.pingCount, settings.timeoutSec, settings.pingSize) { summary ->
             _state.update {
                 it.copy(
                     pingSummary = summary,
+                    phase = RunPhase.PING,
+                    progress = (summary.transmitted.toFloat() / settings.pingCount.coerceAtLeast(1)).coerceIn(0f, 1f),
                     status = "Пинг: ${summary.received} из ${summary.transmitted}",
                 )
             }
@@ -237,7 +296,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun runWifiSurvey(draft: Draft) {
         if (draft.network == null) captureNetwork(draft)
-        _state.update { it.copy(status = "Сканирование частот Wi‑Fi…") }
+        _state.update { it.copy(phase = RunPhase.WIFI, progress = null, status = "Сканирование частот Wi‑Fi…") }
         val survey = try {
             WifiSurveyor.collect(getApplication())
         } catch (cancelled: CancellationException) {
@@ -252,8 +311,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun runSpeed(draft: Draft) {
         if (draft.network == null) captureNetwork(draft)
+        _state.update { it.copy(phase = RunPhase.SPEED, progress = null, status = "Замер скорости…") }
         val speed = SpeedTest.measure { status ->
-            _state.update { it.copy(status = status, progress = null) }
+            _state.update { it.copy(phase = RunPhase.SPEED, status = status, progress = null) }
         }
         draft.speed = speed
         _state.update { it.copy(speed = speed) }
@@ -270,7 +330,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         draft.hostCache = settings.maxHosts
         draft.resolveNames = settings.resolveNames
         if (draft.network == null) captureNetwork(draft)
-        _state.update { it.copy(status = "Калибровка задержки…", progress = 0f) }
+        _state.update { it.copy(phase = RunPhase.MTR, status = "Калибровка задержки…", progress = 0f) }
         val hops = mtr.run(
             host = draft.host,
             cycles = cycles,
@@ -287,6 +347,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _state.update {
                 it.copy(
                     hops = progress.hops,
+                    phase = RunPhase.MTR,
                     progress = fraction.coerceIn(0f, 1f),
                     status = "MTR: цикл ${progress.cycle} из ${progress.cycles}, прыжок ${progress.ttl}",
                 )
@@ -365,6 +426,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 info = it.info,
                 error = result.error,
                 progress = 1f,
+                phase = RunPhase.IDLE,
                 status = when {
                     stopped -> "Остановлено. Частичный отчёт можно отправить."
                     result.error != null -> "Проверка закончилась с ошибкой. Отчёт всё равно можно отправить."

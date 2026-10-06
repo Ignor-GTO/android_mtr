@@ -20,8 +20,8 @@ android {
         applicationId = "uz.spi.netmtr_2"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "2.2.0"
+        versionCode = 4
+        versionName = "2.3.0"
     }
 
     signingConfigs {
@@ -38,7 +38,8 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("release")
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

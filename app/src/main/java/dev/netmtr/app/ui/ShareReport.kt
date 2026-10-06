@@ -1,9 +1,11 @@
 package dev.netmtr.app.ui
 
+import android.content.ClipData
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 
 private val knownTelegramPackages = setOf(
@@ -25,11 +27,14 @@ fun isTelegramPackage(packageName: String): Boolean {
         "exteragram" in name
 }
 
-fun shareReport(context: Context, plain: String, telegramHtml: String, subject: String) {
+fun shareReport(context: Context, plain: String, telegramHtml: String, subject: String, pdf: Uri) {
     val probe = Intent(Intent.ACTION_SEND).apply {
-        type = "text/plain"
-        putExtra(Intent.EXTRA_TEXT, plain)
+        type = "application/pdf"
+        putExtra(Intent.EXTRA_STREAM, pdf)
         putExtra(Intent.EXTRA_SUBJECT, subject)
+        putExtra(Intent.EXTRA_TEXT, plain)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        clipData = ClipData.newRawUri("report", pdf)
     }
     val targets = resolveSendTargets(context, probe)
     if (targets.isEmpty()) {
@@ -39,19 +44,22 @@ fun shareReport(context: Context, plain: String, telegramHtml: String, subject: 
     val intents = targets.map { info ->
         val packageName = info.activityInfo.packageName
         val forTelegram = isTelegramPackage(packageName)
+        context.grantUriPermission(packageName, pdf, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         Intent(Intent.ACTION_SEND).apply {
             component = ComponentName(packageName, info.activityInfo.name)
-            type = if (forTelegram) "text/html" else "text/plain"
+            type = "application/pdf"
+            putExtra(Intent.EXTRA_STREAM, pdf)
             putExtra(Intent.EXTRA_SUBJECT, subject)
-            if (forTelegram) {
-                putExtra(Intent.EXTRA_TEXT, telegramHtml)
-                putExtra(Intent.EXTRA_HTML_TEXT, telegramHtml)
-            } else {
-                putExtra(Intent.EXTRA_TEXT, plain)
-            }
+            putExtra(Intent.EXTRA_TEXT, if (forTelegram) telegramHtml else plain)
+            if (forTelegram) putExtra(Intent.EXTRA_HTML_TEXT, telegramHtml)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            clipData = ClipData.newRawUri("report", pdf)
         }
     }
-    val chooser = Intent.createChooser(intents.first(), "Отправить отчёт администратору")
+    val chooser = Intent.createChooser(intents.first(), "Отправить отчёт администратору").apply {
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        clipData = ClipData.newRawUri("report", pdf)
+    }
     if (intents.size > 1) {
         chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, intents.drop(1).toTypedArray())
     }
