@@ -11,9 +11,11 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,8 +27,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -39,6 +43,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -51,6 +56,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -75,11 +82,53 @@ import dev.netmtr.app.probe.PingSummary
 import dev.netmtr.app.probe.SpeedResult
 import dev.netmtr.app.probe.TextFormat
 import dev.netmtr.app.probe.WifiSurvey
+import dev.netmtr.app.ui.theme.Spectr
 import kotlinx.coroutines.launch
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 private val presets = listOf("8.8.8.8", "1.1.1.1", "9.9.9.9", "dns.google")
+private val cardShape = RoundedCornerShape(20.dp)
+
+@Composable
+private fun AppCard(content: @Composable ColumnScope.() -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = cardShape,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+        content = content,
+    )
+}
+
+@Composable
+private fun HeroPanel(eyebrow: String, title: String, detail: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(cardShape)
+            .background(Brush.horizontalGradient(listOf(Spectr.indigo500, Spectr.purple)))
+            .padding(horizontal = 20.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(eyebrow, color = Spectr.indigo100, style = MaterialTheme.typography.labelLarge)
+        Text(title, color = Color.White, style = MaterialTheme.typography.headlineSmall)
+        Text(detail, color = Color.White.copy(alpha = 0.88f), style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun ActionTile(title: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = modifier.height(56.dp),
+        shape = RoundedCornerShape(16.dp),
+        border = ButtonDefaults.outlinedButtonBorder(enabled = true),
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.primary),
+    ) {
+        Text(title, fontWeight = FontWeight.SemiBold)
+    }
+}
 
 @Composable
 fun NetMtrScreen(viewModel: MainViewModel = viewModel()) {
@@ -114,16 +163,34 @@ fun NetMtrScreen(viewModel: MainViewModel = viewModel()) {
         onDispose { view.keepScreenOn = false }
     }
 
+    val dark = isSystemInDarkTheme()
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(
+                Brush.linearGradient(
+                    if (dark) {
+                        listOf(Color(0xFF111827), Color(0xFF1F2937))
+                    } else {
+                        listOf(Color(0xFFEFF6FF), Color(0xFFE0E7FF))
+                    },
+                ),
+            ),
+    ) {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = Color.Transparent,
         topBar = {
             if (state.running) {
                 RunStatusBar(state.status, state.progress)
             }
         },
         bottomBar = {
-            Column(Modifier.navigationBarsPadding()) {
+            Column(
+                Modifier
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f))
+                    .navigationBarsPadding(),
+            ) {
             when {
                 state.running -> {
                     Button(
@@ -210,6 +277,7 @@ fun NetMtrScreen(viewModel: MainViewModel = viewModel()) {
             }
         }
     }
+    }
 }
 
 @Composable
@@ -217,16 +285,29 @@ private fun RunStatusBar(status: String, progress: Float?) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
+            .background(Brush.horizontalGradient(listOf(Spectr.indigo500, Spectr.purple)))
             .statusBarsPadding()
             .padding(horizontal = 20.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text(status, style = MaterialTheme.typography.titleMedium)
+        Text(status, color = Color.White, style = MaterialTheme.typography.titleMedium)
         if (progress == null) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            LinearProgressIndicator(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(99.dp)),
+                color = Color.White,
+                trackColor = Color.White.copy(alpha = 0.28f),
+            )
         } else {
-            LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(99.dp)),
+                color = Color.White,
+                trackColor = Color.White.copy(alpha = 0.28f),
+            )
         }
     }
 }
@@ -269,11 +350,10 @@ private fun SetupForm(
     onWifi: () -> Unit,
     onLan: () -> Unit,
 ) {
-    Text(stringResource(dev.netmtr.app.R.string.app_name), style = MaterialTheme.typography.headlineMedium)
-    Text(
-        "WinMTR, трассировка и пинг. Отчёт можно отправить администратору.",
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    HeroPanel(
+        eyebrow = "Spectr IT",
+        title = stringResource(dev.netmtr.app.R.string.app_name),
+        detail = "WinMTR, трассировка и пинг. Отчёт можно отправить администратору.",
     )
     OutlinedTextField(
         value = state.host,
@@ -325,17 +405,18 @@ private fun SetupForm(
         modifier = Modifier
             .fillMaxWidth()
             .height(52.dp),
+        shape = RoundedCornerShape(16.dp),
     ) { Text("Полная проверка") }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = viewModel::runMtr, modifier = Modifier.weight(1f)) { Text("MTR") }
-        OutlinedButton(onClick = viewModel::runTrace, modifier = Modifier.weight(1f)) { Text("Трасса") }
+        ActionTile("MTR", viewModel::runMtr, Modifier.weight(1f))
+        ActionTile("Трасса", viewModel::runTrace, Modifier.weight(1f))
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = viewModel::runPing, modifier = Modifier.weight(1f)) { Text("Пинг") }
-        OutlinedButton(onClick = viewModel::runSpeed, modifier = Modifier.weight(1f)) { Text("Скорость") }
+        ActionTile("Пинг", viewModel::runPing, Modifier.weight(1f))
+        ActionTile("Скорость", viewModel::runSpeed, Modifier.weight(1f))
     }
-    OutlinedButton(onClick = onWifi, modifier = Modifier.fillMaxWidth()) { Text("Частоты Wi‑Fi") }
-    OutlinedButton(onClick = onLan, modifier = Modifier.fillMaxWidth()) { Text("Устройства в сети") }
+    ActionTile("Частоты Wi‑Fi", onWifi, Modifier.fillMaxWidth())
+    ActionTile("Устройства в сети", onLan, Modifier.fillMaxWidth())
     Text(
         "Spectr IT NetMTR-2 ${BuildConfig.VERSION_NAME}. Держите приложение открытым, пока идёт проверка.",
         style = MaterialTheme.typography.bodySmall,
@@ -350,8 +431,8 @@ private fun SettingsSection(
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    AppCard {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -365,7 +446,7 @@ private fun SettingsSection(
                         Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                Text(if (open) "▾" else "▸", style = MaterialTheme.typography.titleMedium)
+                Text(if (open) "▾" else "▸", color = Spectr.indigo500, style = MaterialTheme.typography.titleMedium)
             }
             if (open) content()
         }
@@ -389,19 +470,14 @@ private fun LiveStage(state: dev.netmtr.app.UiState) {
 
 @Composable
 private fun StagePlaceholder(status: String) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    AppCard {
         Text(status, modifier = Modifier.padding(20.dp), style = MaterialTheme.typography.titleMedium)
     }
 }
 
 @Composable
 private fun BriefReport(state: dev.netmtr.app.UiState) {
-    Text(state.host, style = MaterialTheme.typography.headlineSmall)
-    Text(
-        state.status,
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+    HeroPanel(eyebrow = "Краткий отчёт", title = state.host, detail = state.status)
     state.error?.let { message ->
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -426,8 +502,8 @@ private fun BriefReport(state: dev.netmtr.app.UiState) {
 }
 
 @Composable
-private fun SectionCard(title: String, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
+    AppCard {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium)
             content()
@@ -439,7 +515,9 @@ private fun SectionCard(title: String, content: @Composable androidx.compose.fou
 private fun BriefSpeed(speed: SpeedResult) {
     Card(
         modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xFF171A1F)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("Скорость", color = Color.White, style = MaterialTheme.typography.titleMedium)
@@ -518,6 +596,7 @@ private fun Metric(
 
 @Composable
 private fun FullReport(state: dev.netmtr.app.UiState) {
+    HeroPanel(eyebrow = "Развёрнутый отчёт", title = state.host, detail = state.status)
     if (state.info.isNotEmpty()) InfoCard(state.info)
     state.speed?.let { SpeedCard(it) }
     state.wifi?.let { WifiCard(it) }
@@ -528,7 +607,7 @@ private fun FullReport(state: dev.netmtr.app.UiState) {
 
 @Composable
 private fun DevicesCard(survey: LanSurvey) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    AppCard {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Устройства в сети", style = MaterialTheme.typography.titleMedium)
             if (survey.error != null) {
@@ -552,29 +631,58 @@ private fun DevicesCard(survey: LanSurvey) {
                     Text("Живых адресов не найдено. Часть телефонов не отвечает на пинг.")
                 }
                 survey.devices.forEach { device ->
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                if (device.gateway) "${device.address} · шлюз" else device.address,
-                                style = MaterialTheme.typography.titleSmall,
-                            )
-                            Text(
-                                device.name ?: "Без имени",
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                LanIdentity.displayMac(device.mac),
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                    val title = device.name ?: "Без имени"
+                    val mark = title.firstOrNull { it.isLetterOrDigit() }?.uppercaseChar()?.toString()
+                        ?: device.address.substringAfterLast('.').take(2)
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                    ) {
+                        Row(
+                            Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .background(
+                                        Brush.linearGradient(listOf(Spectr.indigo500, Spectr.purple)),
+                                        CircleShape,
+                                    ),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(mark, color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    if (device.gateway) "$title · шлюз" else title,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    device.address,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    LanIdentity.displayMac(device.mac),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = Spectr.indigo500,
+                                )
+                            }
+                            Surface(shape = RoundedCornerShape(99.dp), color = Spectr.indigo.copy(alpha = 0.12f)) {
+                                Text(
+                                    device.rttMs?.let { "${TextFormat.ms(it)} мс" } ?: "ARP",
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    color = if (isSystemInDarkTheme()) Spectr.indigo100 else Spectr.indigo,
+                                    style = MaterialTheme.typography.labelLarge,
+                                )
+                            }
                         }
-                        Text(
-                            device.rttMs?.let { "${TextFormat.ms(it)} мс" } ?: "ARP",
-                            style = MaterialTheme.typography.titleSmall,
-                        )
                     }
                 }
             }
@@ -584,10 +692,19 @@ private fun DevicesCard(survey: LanSurvey) {
 
 @Composable
 private fun InfoCard(lines: List<String>) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    AppCard {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Сеть", style = MaterialTheme.typography.titleMedium)
             lines.forEach { line ->
-                Text(line, style = MaterialTheme.typography.bodyMedium)
+                val parts = line.split(": ", limit = 2)
+                if (parts.size == 2) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(parts[0], style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(parts[1], style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                    }
+                } else {
+                    Text(line, style = MaterialTheme.typography.bodyMedium)
+                }
             }
         }
     }
@@ -595,7 +712,7 @@ private fun InfoCard(lines: List<String>) {
 
 @Composable
 private fun PingCard(summary: PingSummary) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    AppCard {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Пинг ${summary.target}", style = MaterialTheme.typography.titleMedium)
             StatRow(summary)
@@ -606,8 +723,8 @@ private fun PingCard(summary: PingSummary) {
 
 @Composable
 private fun HopCard(hops: List<HopRow>) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    AppCard {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Маршрут", style = MaterialTheme.typography.titleMedium)
             HopTable(hops)
             Text(
@@ -684,7 +801,9 @@ private fun DecimalStepper(
 private fun SpeedCard(speed: SpeedResult) {
     Card(
         modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xFF171A1F)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
     ) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 18.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
             Row(Modifier.fillMaxWidth()) {
@@ -741,8 +860,8 @@ private fun LatencyMark(icon: String, value: String, color: Color) {
 
 @Composable
 private fun WifiCard(survey: WifiSurvey) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    AppCard {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Частоты Wi‑Fi", style = MaterialTheme.typography.titleMedium)
             Text(survey.routerLine(), style = MaterialTheme.typography.bodyMedium)
             survey.note?.let {
@@ -756,16 +875,44 @@ private fun WifiCard(survey: WifiSurvey) {
 @Composable
 private fun ChannelRow(channel: ChannelLoad) {
     val color = when (channel.load) {
-        "нагружена" -> MaterialTheme.colorScheme.error
-        "слабо" -> Color(0xFFB8860B)
-        else -> Color(0xFF1B7F4E)
+        "нагружена" -> Spectr.rose
+        "слабо" -> Spectr.amber
+        else -> Spectr.emerald
     }
-    val own = if (channel.own) " · наш роутер" else ""
-    Text(
-        "${channel.frequencyMhz} МГц · канал ${channel.channel} · ${channel.band} · соседей ${channel.neighbors} · ${channel.load}$own",
-        color = color,
-        style = MaterialTheme.typography.bodySmall,
-    )
+    val fill = when (channel.load) {
+        "нагружена" -> 0.92f
+        "слабо" -> 0.48f
+        else -> 0.16f
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Канал ${channel.channel} · ${channel.frequencyMhz} МГц", style = MaterialTheme.typography.titleSmall)
+            if (channel.own) {
+                Surface(shape = RoundedCornerShape(99.dp), color = Spectr.indigo) {
+                    Text(
+                        "наш",
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
+        }
+        LinearProgressIndicator(
+            progress = { fill },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(8.dp)
+                .clip(RoundedCornerShape(99.dp)),
+            color = color,
+            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+        )
+        Text(
+            "${channel.band} · соседей ${channel.neighbors} · ${channel.load}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 private fun wifiPermissions(): Array<String> {
@@ -828,26 +975,43 @@ private fun LatencyBars(samples: List<Double>, color: Color) {
 
 @Composable
 private fun HopTable(hops: List<HopRow>) {
-    Column(Modifier.horizontalScroll(rememberScrollState())) {
-        Text(
-            TextFormat.hopHeader(),
-            fontFamily = FontFamily.Monospace,
-            fontSize = 11.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         hops.forEach { row ->
-            val color = when {
+            val accent = when {
                 row.received == 0 -> MaterialTheme.colorScheme.outline
-                row.lossPercent >= 10 -> MaterialTheme.colorScheme.error
-                row.reachedTarget -> MaterialTheme.colorScheme.primary
-                else -> MaterialTheme.colorScheme.onSurface
+                row.lossPercent >= 10 -> Spectr.rose
+                row.reachedTarget -> Spectr.emerald
+                else -> Spectr.indigo500
             }
-            Text(
-                TextFormat.hopLine(row),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 11.sp,
-                color = color,
-            )
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .background(accent, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(row.hop.toString(), color = Color.White, style = MaterialTheme.typography.labelLarge)
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(row.address, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            "потери ${TextFormat.pct(row.lossPercent)} · ${row.received}/${row.sent}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Text(TextFormat.msUnit(row.avgMs), style = MaterialTheme.typography.titleSmall, color = accent)
+                }
+            }
         }
     }
 }

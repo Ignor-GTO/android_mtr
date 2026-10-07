@@ -20,8 +20,8 @@ android {
         applicationId = "uz.spi.netmtr_2"
         minSdk = 26
         targetSdk = 36
-        versionCode = 11
-        versionName = "2.3.7"
+        versionCode = 12
+        versionName = "2.3.8"
     }
 
     signingConfigs {
