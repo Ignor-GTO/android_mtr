@@ -498,7 +498,7 @@ private fun BriefReport(state: dev.netmtr.app.UiState) {
     }
     state.wifi?.let { survey -> BriefWifi(survey) }
     state.lan?.let { survey -> DevicesCard(survey) }
-    if (state.hops.isNotEmpty()) BriefRoute(state.hops)
+    if (state.hops.isNotEmpty()) HopCard(state.hops)
 }
 
 @Composable
@@ -559,18 +559,6 @@ private fun BriefWifi(survey: WifiSurvey) {
 }
 
 @Composable
-private fun BriefRoute(hops: List<HopRow>) {
-    val last = hops.lastOrNull { it.received > 0 }
-    SectionCard("Маршрут") {
-        Row(Modifier.fillMaxWidth()) {
-            Metric("Прыжков", hops.size.toString(), modifier = Modifier.weight(1f))
-            Metric("Последний", last?.address ?: "—", modifier = Modifier.weight(1.4f))
-            Metric("Потери", last?.let { TextFormat.pct(it.lossPercent) } ?: "—", modifier = Modifier.weight(1f))
-        }
-    }
-}
-
-@Composable
 private fun Metric(
     label: String,
     value: String,
@@ -597,12 +585,12 @@ private fun Metric(
 @Composable
 private fun FullReport(state: dev.netmtr.app.UiState) {
     HeroPanel(eyebrow = "Развёрнутый отчёт", title = state.host, detail = state.status)
+    if (state.hops.isNotEmpty()) HopCard(state.hops)
     if (state.info.isNotEmpty()) InfoCard(state.info)
     state.speed?.let { SpeedCard(it) }
     state.wifi?.let { WifiCard(it) }
     state.lan?.let { DevicesCard(it) }
     state.pingSummary?.let { PingCard(it) }
-    if (state.hops.isNotEmpty()) HopCard(state.hops)
 }
 
 @Composable
@@ -1047,13 +1035,21 @@ private fun HopTable(hops: List<HopRow>) {
                         ) {
                             Text(row.hop.toString(), color = Color.White, style = MaterialTheme.typography.labelLarge)
                         }
-                        Text(
-                            row.address,
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.titleSmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                row.address,
+                                style = MaterialTheme.typography.titleSmall,
+                                maxLines = 3,
+                            )
+                            val others = row.addresses.filter { it != row.address && it.isNotBlank() }
+                            if (others.isNotEmpty()) {
+                                Text(
+                                    others.joinToString(", "),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         HopStat("Потери", TextFormat.pct(row.lossPercent), Modifier.weight(1f), accent)
