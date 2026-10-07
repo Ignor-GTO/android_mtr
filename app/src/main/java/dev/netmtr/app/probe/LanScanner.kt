@@ -52,7 +52,7 @@ class LanScanner(private val ping: PingClient) {
             val replies = coroutineScope {
                 batch.map { address ->
                     async {
-                        address to ping.oneRtt(address, timeoutSec = 1, payloadBytes = 32)
+                        address to ping.echoFrom(address, timeoutSec = 1, payloadBytes = 32)
                     }
                 }.awaitAll()
             }
@@ -82,13 +82,24 @@ class LanScanner(private val ping: PingClient) {
                 gateway = address == endpoint.gateway,
             )).copy(mac = mac)
         }
+        val raw = found.values.toList()
+        val real = LanPlan.keepRealDevices(raw, endpoint.gateway)
+        val dropped = raw.size - real.size
         val named = coroutineScope {
-            found.values.map { device ->
+            real.map { device ->
                 async { device.copy(name = lookupName(device.address)) }
             }.awaitAll()
         }
+        found.clear()
         named.forEach { found[it.address] = it }
-        return snapshot().also(onUpdate)
+        val base = snapshot()
+        val extra = if (dropped > 2) {
+            "Одинаковый MAC у многих адресов — это ответ роутера, а не отдельные устройства."
+        } else {
+            null
+        }
+        val combined = listOfNotNull(base.note, extra).joinToString(" ").ifBlank { null }
+        return base.copy(note = combined).also(onUpdate)
     }
 
     private suspend fun lookupName(address: String): String? = withTimeoutOrNull(400) {

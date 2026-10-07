@@ -68,6 +68,14 @@ object PingParser {
         return null
     }
 
+    fun sameAddress(reply: String, host: String): Boolean {
+        val wanted = host.trim().substringBefore('%')
+        val raw = reply.trim().substringBefore('%')
+        if (raw.equals(wanted, ignoreCase = true)) return true
+        val head = raw.substringBefore(' ').substringBefore('(').trim()
+        return head.equals(wanted, ignoreCase = true)
+    }
+
     fun sequence(line: String): Int? = seqRe.find(line)?.groupValues?.get(1)?.toIntOrNull()
 
     fun isTimeout(line: String): Boolean = timeoutRe.containsMatchIn(line)

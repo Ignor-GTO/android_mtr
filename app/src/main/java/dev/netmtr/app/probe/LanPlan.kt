@@ -68,6 +68,17 @@ object LanPlan {
         return table
     }
 
+    fun keepRealDevices(devices: List<LanDevice>, gateway: String?): List<LanDevice> {
+        val macCount = devices.mapNotNull { device -> device.mac?.lowercase() }.groupingBy { it }.eachCount()
+        return devices.filter { device ->
+            val mac = device.mac?.lowercase()
+            if (mac == null) return@filter device.rttMs != null
+            val shared = (macCount[mac] ?: 1) > 1
+            if (!shared) return@filter true
+            device.gateway || device.address == gateway
+        }
+    }
+
     fun compareAddresses(left: String, right: String): Int {
         val a = ipv4(left) ?: Long.MAX_VALUE
         val b = ipv4(right) ?: Long.MAX_VALUE

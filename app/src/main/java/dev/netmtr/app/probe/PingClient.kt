@@ -79,6 +79,23 @@ class PingClient(
         return last
     }
 
+    suspend fun echoFrom(host: String, timeoutSec: Int = 1, payloadBytes: Int = 64): Double? {
+        return try {
+            val attempts = commands(host, count = 1, timeoutSec = timeoutSec, ttl = null, payloadBytes = payloadBytes, numeric = true)
+            for ((index, command) in attempts.withIndex()) {
+                val outcome = collect(host, command, 1, timeoutSec) {}
+                if (outcome.usage && outcome.echoes.isEmpty() && index < attempts.lastIndex) continue
+                val echo = outcome.echoes.firstOrNull { PingParser.sameAddress(it.address, host) } ?: return null
+                return echo.rttMs
+            }
+            null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     suspend fun oneRtt(host: String, timeoutSec: Int = 1, payloadBytes: Int = 64): Double? {
         return try {
             val attempts = commands(host, count = 1, timeoutSec = timeoutSec, ttl = null, payloadBytes = payloadBytes, numeric = true)
@@ -157,6 +174,7 @@ class PingClient(
         onUpdate: (PingSummary) -> Unit,
     ): CollectOutcome {
         val samples = mutableListOf<Double>()
+        val echoes = mutableListOf<LineEvent.Echo>()
         var fatal: String? = null
         var usage = false
         var sent = 0
@@ -171,6 +189,7 @@ class PingClient(
             }
             when (val parsed = PingParser.parseLine(line)) {
                 is LineEvent.Echo -> {
+                    echoes += parsed
                     parsed.rttMs?.let { samples += it }
                     noteSent()
                     if (sent < samples.size) sent = samples.size
@@ -199,7 +218,7 @@ class PingClient(
                 usage = PingParser.isUsageError(output.text)
             }
         }
-        return CollectOutcome(samples, stats, fatal, usage)
+        return CollectOutcome(samples, stats, fatal, usage, echoes.toList())
     }
 
     private fun corrected(elapsedMs: Double?): Double {
@@ -245,6 +264,7 @@ class PingClient(
         val stats: PingStats?,
         val fatal: String?,
         val usage: Boolean,
+        val echoes: List<LineEvent.Echo> = emptyList(),
     )
 
     companion object {

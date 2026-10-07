@@ -26,6 +26,20 @@ class LanPlanTest {
     }
 
     @Test
+    fun dropsProxyArpCopiesOfTheGateway() {
+        val gatewayMac = "aa:bb:cc:dd:ee:ff"
+        val devices = listOf(
+            LanDevice("192.168.1.1", gatewayMac, null, 1.0, gateway = true),
+            LanDevice("192.168.1.2", gatewayMac, null, 1.2, gateway = false),
+            LanDevice("192.168.1.3", gatewayMac, null, 1.1, gateway = false),
+            LanDevice("192.168.1.20", "11:22:33:44:55:66", null, 4.0, gateway = false),
+            LanDevice("192.168.1.30", null, null, 3.0, gateway = false),
+        )
+        val kept = LanPlan.keepRealDevices(devices, "192.168.1.1").map { it.address }
+        assertEquals(listOf("192.168.1.1", "192.168.1.20", "192.168.1.30"), kept)
+    }
+
+    @Test
     fun readsCompleteArpEntries() {
         val table = LanPlan.parseArp(
             """

@@ -1,11 +1,19 @@
 package dev.netmtr.app.probe
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PingParserTest {
+    @Test
+    fun replyMustComeFromTheSameAddress() {
+        assertTrue(PingParser.sameAddress("192.168.1.20", "192.168.1.20"))
+        assertTrue(PingParser.sameAddress("192.168.1.20 (192.168.1.20)", "192.168.1.20"))
+        assertFalse(PingParser.sameAddress("192.168.1.1", "192.168.1.20"))
+    }
+
     @Test
     fun readsSequenceFromZeroOrOne() {
         assertEquals(1, PingParser.sequence("64 bytes from 8.8.8.8: icmp_seq=1 ttl=117 time=12.3 ms"))
