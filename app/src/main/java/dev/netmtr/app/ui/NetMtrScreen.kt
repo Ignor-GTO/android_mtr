@@ -548,7 +548,7 @@ private fun DevicesCard(survey: LanSurvey) {
                 survey.note?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                if (survey.devices.isEmpty() && survey.scanned >= survey.planned && survey.planned > 0) {
+                if (survey.devices.isEmpty() && survey.scanned >= survey.planned && survey.planned > 0 && survey.note == null) {
                     Text("Живых адресов не найдено. Часть телефонов не отвечает на пинг.")
                 }
                 survey.devices.forEach { device ->

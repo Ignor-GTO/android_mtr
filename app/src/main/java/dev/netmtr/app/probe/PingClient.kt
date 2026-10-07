@@ -79,9 +79,9 @@ class PingClient(
         return last
     }
 
-    suspend fun echoFrom(host: String, timeoutSec: Int = 1, payloadBytes: Int = 64): Double? {
+    suspend fun echoFrom(host: String, timeoutSec: Int = 1, payloadBytes: Int = 64, source: String? = null): Double? {
         return try {
-            val attempts = commands(host, count = 1, timeoutSec = timeoutSec, ttl = null, payloadBytes = payloadBytes, numeric = true)
+            val attempts = commands(host, count = 1, timeoutSec = timeoutSec, ttl = null, payloadBytes = payloadBytes, numeric = true, source = source)
             for ((index, command) in attempts.withIndex()) {
                 val outcome = collect(host, command, 1, timeoutSec) {}
                 if (outcome.usage && outcome.echoes.isEmpty() && index < attempts.lastIndex) continue
@@ -233,10 +233,12 @@ class PingClient(
         ttl: Int?,
         payloadBytes: Int,
         numeric: Boolean,
+        source: String? = null,
     ): List<List<String>> {
         val family = if (host.contains(':')) "-6" else "-4"
         val full = mutableListOf(pingBinary, family)
         if (numeric) full += "-n"
+        if (!source.isNullOrBlank()) full += listOf("-I", source)
         full += listOf("-c", count.toString(), "-W", timeoutSec.toString())
         if (count > 1) full += listOf("-i", "1")
         if (count == 1) full += listOf("-w", (timeoutSec + 1).toString())

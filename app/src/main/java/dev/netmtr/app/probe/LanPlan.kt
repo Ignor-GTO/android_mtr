@@ -8,6 +8,11 @@ data class LanDevice(
     val gateway: Boolean,
 )
 
+data class KeptDevices(
+    val devices: List<LanDevice>,
+    val hidProxy: Boolean,
+)
+
 data class LanSurvey(
     val localAddress: String?,
     val prefix: Int?,
@@ -68,15 +73,36 @@ object LanPlan {
         return table
     }
 
-    fun keepRealDevices(devices: List<LanDevice>, gateway: String?): List<LanDevice> {
+    fun keepRealDevices(devices: List<LanDevice>, gateway: String?, planned: Int = devices.size): KeptDevices {
         val macCount = devices.mapNotNull { device -> device.mac?.lowercase() }.groupingBy { it }.eachCount()
-        return devices.filter { device ->
-            val mac = device.mac?.lowercase()
-            if (mac == null) return@filter device.rttMs != null
-            val shared = (macCount[mac] ?: 1) > 1
-            if (!shared) return@filter true
-            device.gateway || device.address == gateway
+        val nameless = devices.filter { device -> device.mac == null && device.rttMs != null }
+        val hidProxy = proxyFlood(nameless, planned)
+        val median = nameless.mapNotNull { it.rttMs }.sorted().let { sorted ->
+            if (sorted.isEmpty()) null else sorted[sorted.size / 2]
         }
+        val kept = devices.filter { device ->
+            val mac = device.mac?.lowercase()
+            if (mac != null) {
+                val shared = (macCount[mac] ?: 1) > 1
+                return@filter !shared || device.gateway || device.address == gateway
+            }
+            if (device.rttMs == null) return@filter false
+            if (!hidProxy) return@filter true
+            if (device.gateway || device.address == gateway) return@filter true
+            val middle = median ?: return@filter false
+            kotlin.math.abs(device.rttMs - middle) >= 8.0
+        }
+        return KeptDevices(kept, hidProxy && kept.size < devices.size)
+    }
+
+    private fun proxyFlood(nameless: List<LanDevice>, planned: Int): Boolean {
+        if (planned < 32 || nameless.size < 16) return false
+        if (nameless.size.toDouble() / planned < 0.8) return false
+        val sorted = nameless.mapNotNull { it.rttMs }.sorted()
+        if (sorted.size < 16) return false
+        val low = sorted[(sorted.size * 0.1).toInt()]
+        val high = sorted[(sorted.size * 0.9).toInt().coerceAtMost(sorted.lastIndex)]
+        return high - low < 5.0
     }
 
     fun compareAddresses(left: String, right: String): Int {

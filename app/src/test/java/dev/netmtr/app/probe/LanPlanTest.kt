@@ -35,8 +35,19 @@ class LanPlanTest {
             LanDevice("192.168.1.20", "11:22:33:44:55:66", null, 4.0, gateway = false),
             LanDevice("192.168.1.30", null, null, 3.0, gateway = false),
         )
-        val kept = LanPlan.keepRealDevices(devices, "192.168.1.1").map { it.address }
+        val kept = LanPlan.keepRealDevices(devices, "192.168.1.1").devices.map { it.address }
         assertEquals(listOf("192.168.1.1", "192.168.1.20", "192.168.1.30"), kept)
+    }
+
+    @Test
+    fun hidesSubnetThatAnswersAllAtOnceWithoutMac() {
+        val devices = (2..254).map { host ->
+            val rtt = if (host == 40) 22.0 else 0.5
+            LanDevice("10.111.222.$host", null, null, rtt, gateway = host == 254)
+        }
+        val kept = LanPlan.keepRealDevices(devices, "10.111.222.254", planned = 253)
+        assertTrue(kept.hidProxy)
+        assertEquals(listOf("10.111.222.40", "10.111.222.254"), kept.devices.map { it.address })
     }
 
     @Test
