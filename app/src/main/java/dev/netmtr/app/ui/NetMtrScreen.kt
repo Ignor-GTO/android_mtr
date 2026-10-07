@@ -934,20 +934,44 @@ private fun hasWifiPermission(context: Context): Boolean {
 
 @Composable
 private fun StatRow(summary: PingSummary) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Stat("Потери", TextFormat.pct(summary.lossPercent))
-        Stat("Мин", TextFormat.ms(summary.minMs))
-        Stat("Сред", TextFormat.ms(summary.avgMs))
-        Stat("Макс", TextFormat.ms(summary.maxMs))
-        Stat("Джиттер", TextFormat.ms(summary.jitterMs))
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "Получено ${summary.received} из ${summary.transmitted}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Stat("Потери", TextFormat.pct(summary.lossPercent), Modifier.weight(1f))
+            Stat("Мин, мс", TextFormat.ms(summary.minMs), Modifier.weight(1f))
+            Stat("Сред, мс", TextFormat.ms(summary.avgMs), Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Stat("Макс, мс", TextFormat.ms(summary.maxMs), Modifier.weight(1f))
+            Stat("Джиттер, мс", TextFormat.ms(summary.jitterMs), Modifier.weight(1f))
+        }
     }
 }
 
 @Composable
-private fun Stat(label: String, value: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, style = MaterialTheme.typography.titleSmall)
-        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun Stat(label: String, value: String, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Column(
+            Modifier.padding(vertical = 8.dp, horizontal = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(value, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -974,6 +998,25 @@ private fun LatencyBars(samples: List<Double>, color: Color) {
 }
 
 @Composable
+private fun HopStat(label: String, value: String, modifier: Modifier = Modifier, valueColor: Color? = null) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            value,
+            color = valueColor ?: MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
 private fun HopTable(hops: List<HopRow>) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         hops.forEach { row ->
@@ -988,28 +1031,42 @@ private fun HopTable(hops: List<HopRow>) {
                 shape = RoundedCornerShape(14.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant,
             ) {
-                Row(
+                Column(
                     Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(32.dp)
-                            .background(accent, CircleShape),
-                        contentAlignment = Alignment.Center,
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        Text(row.hop.toString(), color = Color.White, style = MaterialTheme.typography.labelLarge)
-                    }
-                    Column(Modifier.weight(1f)) {
-                        Text(row.address, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .background(accent, CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(row.hop.toString(), color = Color.White, style = MaterialTheme.typography.labelLarge)
+                        }
                         Text(
-                            "потери ${TextFormat.pct(row.lossPercent)} · ${row.received}/${row.sent}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            row.address,
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    Text(TextFormat.msUnit(row.avgMs), style = MaterialTheme.typography.titleSmall, color = accent)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        HopStat("Потери", TextFormat.pct(row.lossPercent), Modifier.weight(1f), accent)
+                        HopStat("Отпр", row.sent.toString(), Modifier.weight(1f))
+                        HopStat("Прин", row.received.toString(), Modifier.weight(1f))
+                        HopStat("Джит", TextFormat.ms(row.jitterMs), Modifier.weight(1f))
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        HopStat("Лучш", TextFormat.ms(row.bestMs), Modifier.weight(1f))
+                        HopStat("Сред", TextFormat.ms(row.avgMs), Modifier.weight(1f), accent)
+                        HopStat("Худш", TextFormat.ms(row.worstMs), Modifier.weight(1f))
+                        HopStat("Посл", TextFormat.ms(row.lastMs), Modifier.weight(1f))
+                    }
                 }
             }
         }
