@@ -22,6 +22,8 @@ object PingParser {
     private val timeRe = Regex(
         """(?i)time[=<]\s*([0-9.]+)\s*ms""",
     )
+    private val seqRe = Regex("""(?i)(?:icmp_)?seq[= ](\d+)""")
+    private val timeoutRe = Regex("""(?i)(?:request timeout|no answer yet|timed out)""")
     private val statsRe = Regex(
         """(\d+)\s+packets transmitted,\s+(\d+)\s+(?:packets\s+)?received""",
         RegexOption.IGNORE_CASE,
@@ -65,6 +67,10 @@ object PingParser {
         }
         return null
     }
+
+    fun sequence(line: String): Int? = seqRe.find(line)?.groupValues?.get(1)?.toIntOrNull()
+
+    fun isTimeout(line: String): Boolean = timeoutRe.containsMatchIn(line)
 
     fun parseStats(text: String): PingStats? {
         val match = statsRe.find(text) ?: return null

@@ -7,6 +7,13 @@ import org.junit.Test
 
 class PingParserTest {
     @Test
+    fun readsSequenceFromZeroOrOne() {
+        assertEquals(1, PingParser.sequence("64 bytes from 8.8.8.8: icmp_seq=1 ttl=117 time=12.3 ms"))
+        assertEquals(0, PingParser.sequence("64 bytes from 1.1.1.1: seq=0 ttl=57 time=11.2 ms"))
+        assertTrue(PingParser.isTimeout("Request timeout for icmp_seq 2"))
+    }
+
+    @Test
     fun parsesEchoReply() {
         val event = PingParser.parseLine("64 bytes from 8.8.8.8: icmp_seq=1 ttl=117 time=12.3 ms")
         val echo = event as LineEvent.Echo

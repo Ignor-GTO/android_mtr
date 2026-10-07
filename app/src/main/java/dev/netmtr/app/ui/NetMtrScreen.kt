@@ -175,8 +175,7 @@ fun NetMtrScreen(viewModel: MainViewModel = viewModel()) {
             when {
                 state.running -> LiveStage(state)
                 state.report != null -> {
-                    BriefReport(state)
-                    if (detailsOpen) FullReport(state)
+                    if (detailsOpen) FullReport(state) else BriefReport(state)
                 }
                 else -> SetupForm(
                     state = state,

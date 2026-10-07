@@ -159,12 +159,22 @@ class PingClient(
         val samples = mutableListOf<Double>()
         var fatal: String? = null
         var usage = false
+        var sent = 0
+        var zeroBased = false
         val timeoutMs = count * 1_500L + timeoutSec * 1_000L + 5_000L
         val output = runner.run(command, timeoutMs) { line, _ ->
+            fun noteSent() {
+                val seq = PingParser.sequence(line) ?: return
+                if (seq == 0) zeroBased = true
+                val soFar = if (zeroBased) seq + 1 else seq
+                if (soFar > sent) sent = soFar
+            }
             when (val parsed = PingParser.parseLine(line)) {
                 is LineEvent.Echo -> {
                     parsed.rttMs?.let { samples += it }
-                    onUpdate(PingSummary.from(host, maxOf(count, samples.size), samples.size, samples))
+                    noteSent()
+                    if (sent < samples.size) sent = samples.size
+                    onUpdate(PingSummary.from(host, sent, samples.size, samples))
                     false
                 }
                 is LineEvent.Fatal -> {
@@ -172,7 +182,13 @@ class PingClient(
                     usage = parsed.usage
                     true
                 }
-                else -> false
+                else -> {
+                    if (PingParser.isTimeout(line)) {
+                        noteSent()
+                        onUpdate(PingSummary.from(host, sent.coerceAtLeast(samples.size), samples.size, samples))
+                    }
+                    false
+                }
             }
         }
         val stats = PingParser.parseStats(output.text)
@@ -203,6 +219,7 @@ class PingClient(
         val full = mutableListOf(pingBinary, family)
         if (numeric) full += "-n"
         full += listOf("-c", count.toString(), "-W", timeoutSec.toString())
+        if (count > 1) full += listOf("-i", "1")
         if (count == 1) full += listOf("-w", (timeoutSec + 1).toString())
         if (payloadBytes > 0) full += listOf("-s", payloadBytes.toString())
         if (ttl != null) full += listOf("-t", ttl.toString())
