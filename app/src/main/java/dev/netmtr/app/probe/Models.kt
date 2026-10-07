@@ -183,6 +183,15 @@ object Hosts {
         return host
     }
 
+    fun isPrivate(host: String): Boolean {
+        if (!isIp(host) || host.contains(':')) return false
+        val parts = host.split('.').mapNotNull { it.toIntOrNull() }
+        if (parts.size != 4) return false
+        val a = parts[0]
+        val b = parts[1]
+        return a == 10 || a == 127 || (a == 192 && b == 168) || (a == 172 && b in 16..31) || (a == 100 && b in 64..127)
+    }
+
     fun isIp(host: String): Boolean {
         if (host.contains(':')) return true
         val parts = host.split('.')

@@ -30,6 +30,7 @@ class MtrEngine(private val ping: PingClient) {
         payloadBytes: Int = 64,
         resolveNames: Boolean = false,
         maxHosts: Int = 60,
+        bind: String? = null,
         onUpdate: (MtrProgress) -> Unit,
     ): List<HopRow> {
         ping.calibrate()
@@ -42,14 +43,14 @@ class MtrEngine(private val ping: PingClient) {
             val limit = pathLimit ?: maxHops
             onUpdate(MtrProgress(cycle, cycles, 1, limit, slots.rows()))
             if (pathLimit == null) {
-                pathLimit = discover(host, limit, timeoutSec, payloadBytes, resolveNames, names, slots) { ttl ->
+                pathLimit = discover(host, limit, timeoutSec, payloadBytes, resolveNames, names, slots, bind) { ttl ->
                     onUpdate(MtrProgress(cycle, cycles, ttl, limit, slots.rows()))
                 }
                 val spent = (System.nanoTime() - cycleStarted) / 1_000_000
                 val wait = intervalMs - spent
                 if (wait > 0) delay(wait)
             } else {
-                val probes = probeCycle(host, limit, timeoutSec, intervalMs, payloadBytes, resolveNames)
+                val probes = probeCycle(host, limit, timeoutSec, intervalMs, payloadBytes, resolveNames, bind)
                 for ((ttl, probe) in probes) {
                     hear(slots, names, ttl, probe, resolveNames)
                 }
@@ -66,13 +67,14 @@ class MtrEngine(private val ping: PingClient) {
         intervalMs: Long,
         payloadBytes: Int,
         resolveNames: Boolean,
+        bind: String?,
     ): List<Pair<Int, Probe>> = supervisorScope {
         val parent = coroutineContext.job
         val open = AtomicBoolean(true)
         val jobs = (1..limit).map { ttl ->
             ttl to async {
                 try {
-                    ping.probe(host, ttl, timeoutSec, payloadBytes = payloadBytes, numeric = !resolveNames)
+                    ping.probe(host, ttl, timeoutSec, payloadBytes = payloadBytes, numeric = !resolveNames, bind = bind)
                 } catch (cancelled: CancellationException) {
                     if (parent.isActive && !open.get()) Probe.Timeout else throw cancelled
                 }
@@ -98,6 +100,7 @@ class MtrEngine(private val ping: PingClient) {
         resolveNames: Boolean,
         names: HostCache,
         slots: MutableMap<Int, Slot>,
+        bind: String?,
         onHop: (Int) -> Unit,
     ): Int {
         var trailingStars = 0
@@ -106,7 +109,7 @@ class MtrEngine(private val ping: PingClient) {
             coroutineContext.ensureActive()
             lastTtl = ttl
             onHop(ttl)
-            val probe = ping.probe(host, ttl, timeoutSec, payloadBytes = payloadBytes, numeric = !resolveNames)
+            val probe = ping.probe(host, ttl, timeoutSec, payloadBytes = payloadBytes, numeric = !resolveNames, bind = bind)
             when (hear(slots, names, ttl, probe, resolveNames)) {
                 Heard.Destination, Heard.Unreachable -> return ttl
                 Heard.Timeout -> {

@@ -1,6 +1,7 @@
 package dev.netmtr.app
 
 import android.app.Application
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.PowerManager
 import androidx.lifecycle.AndroidViewModel
@@ -20,6 +21,7 @@ import dev.netmtr.app.probe.PingClient
 import dev.netmtr.app.probe.PingSummary
 import dev.netmtr.app.probe.ProbeException
 import dev.netmtr.app.probe.ReportText
+import dev.netmtr.app.probe.RouteBind
 import dev.netmtr.app.probe.SpeedResult
 import dev.netmtr.app.probe.SpeedTest
 import dev.netmtr.app.probe.TcpResult
@@ -244,7 +246,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (gateway != null) {
             _state.update { it.copy(phase = RunPhase.GATEWAY, progress = 0f, status = "Пинг шлюза $gateway") }
             try {
-                draft.gatewayPing = ping.pingMany(gateway, count = settings.pingCount, timeoutSec = settings.timeoutSec, payloadBytes = settings.pingSize) { summary ->
+                draft.gatewayPing = offVpn { bind -> ping.pingMany(gateway, count = settings.pingCount, timeoutSec = settings.timeoutSec, payloadBytes = settings.pingSize, bind = bind) { summary ->
                     draft.gatewayPing = summary
                     _state.update {
                         it.copy(
@@ -254,7 +256,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             status = "Пинг шлюза: ${summary.received} из ${summary.transmitted}",
                         )
                     }
-                }
+                } }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -263,7 +265,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         refreshInfo(draft)
         _state.update { it.copy(phase = RunPhase.PING, progress = 0f, pingSummary = null, status = "Пинг ${draft.host}") }
-        draft.targetPing = ping.pingMany(draft.host, settings.pingCount, settings.timeoutSec, settings.pingSize) { summary ->
+        draft.targetPing = offVpn { bind ->
+            ping.pingMany(draft.host, settings.pingCount, settings.timeoutSec, settings.pingSize, bind = bind) { summary ->
             _state.update {
                 it.copy(
                     pingSummary = summary,
@@ -272,7 +275,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     status = "Пинг цели: ${summary.received} из ${summary.transmitted}",
                 )
             }
+            }
         }
+        noteLocalEcho(draft)
         refreshInfo(draft)
         var pathError: String? = null
         try {
@@ -291,7 +296,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         draft.timeoutSec = settings.timeoutSec
         captureNetwork(draft)
         _state.update { it.copy(phase = RunPhase.PING, progress = 0f, status = "Пинг ${draft.host}") }
-        draft.targetPing = ping.pingMany(draft.host, settings.pingCount, settings.timeoutSec, settings.pingSize) { summary ->
+        draft.targetPing = offVpn { bind ->
+            ping.pingMany(draft.host, settings.pingCount, settings.timeoutSec, settings.pingSize, bind = bind) { summary ->
             _state.update {
                 it.copy(
                     pingSummary = summary,
@@ -300,7 +306,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     status = "Пинг: ${summary.received} из ${summary.transmitted}",
                 )
             }
+            }
         }
+        noteLocalEcho(draft)
     }
 
     private suspend fun runWifiSurvey(draft: Draft) {
@@ -365,7 +373,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         draft.resolveNames = settings.resolveNames
         if (draft.network == null) captureNetwork(draft)
         _state.update { it.copy(phase = RunPhase.MTR, status = "Калибровка задержки…", progress = 0f) }
-        val hops = mtr.run(
+        val hops = offVpn { bind -> mtr.run(
             host = draft.host,
             cycles = cycles,
             maxHops = settings.maxHops,
@@ -374,6 +382,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             payloadBytes = settings.pingSize,
             resolveNames = settings.resolveNames,
             maxHosts = settings.maxHosts,
+            bind = bind,
         ) { progress ->
             val fraction = (
                 (progress.cycle - 1) + progress.ttl.toFloat() / progress.limit.coerceAtLeast(1)
@@ -387,10 +396,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
         }
+        }
         draft.hops = hops
         draft.overheadMs = ping.overheadMs
         draft.overheadApplied = ping.overheadApplied
         _state.update { it.copy(hops = hops) }
+        noteLocalEcho(draft)
+    }
+
+    private suspend fun <T> offVpn(block: suspend (String?) -> T): T {
+        val connectivity = getApplication<Application>().getSystemService(ConnectivityManager::class.java)
+        val direct = RouteBind.direct(connectivity)
+        val bound = direct != null && connectivity.bindProcessToNetwork(direct.network)
+        try {
+            return block(direct?.ipv4)
+        } finally {
+            if (bound) connectivity.bindProcessToNetwork(null)
+        }
+    }
+
+    private fun noteLocalEcho(draft: Draft) {
+        if (draft.remarks.any { it.startsWith("Ответ слишком быстрый") }) return
+        if (Hosts.isPrivate(draft.host)) return
+        val pingFast = draft.targetPing?.avgMs?.let { it < 2.0 } == true
+        val hop = draft.hops.singleOrNull()
+        val hopFast = hop != null && hop.reachedTarget && (hop.avgMs ?: 99.0) < 2.0
+        if (!pingFast && !hopFast) return
+        val shown = draft.targetPing?.avgMs ?: hop?.avgMs
+        draft.remarks += "Ответ слишком быстрый: около ${TextFormat.ms(shown)} мс. До узла в интернете так не доходят, это ответ VPN или локальной службы."
     }
 
     private fun captureNetwork(draft: Draft) {

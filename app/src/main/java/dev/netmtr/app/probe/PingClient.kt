@@ -64,12 +64,27 @@ class PingClient(
         timeoutSec: Int,
         payloadBytes: Int = 64,
         numeric: Boolean = true,
+        bind: String? = null,
+    ): Probe {
+        val result = probeBound(host, ttl, timeoutSec, payloadBytes, numeric, bind)
+        if (bind.isNullOrBlank() || result !is Probe.Failure) return result
+        return probeBound(host, ttl, timeoutSec, payloadBytes, numeric, null)
+    }
+
+    private suspend fun probeBound(
+        host: String,
+        ttl: Int,
+        timeoutSec: Int,
+        payloadBytes: Int,
+        numeric: Boolean,
+        bind: String?,
     ): Probe {
         var last = Probe.Failure("ping не выполнился", usage = false)
-        for ((index, command) in commands(host, count = 1, timeoutSec = timeoutSec, ttl = ttl, payloadBytes = payloadBytes, numeric = numeric).withIndex()) {
+        val attempts = commands(host, count = 1, timeoutSec = timeoutSec, ttl = ttl, payloadBytes = payloadBytes, numeric = numeric, source = bind)
+        for ((index, command) in attempts.withIndex()) {
             coroutineContext.ensureActive()
             val result = probeOnce(command, timeoutSec)
-            val retry = result is Probe.Failure && result.usage && index < 2
+            val retry = result is Probe.Failure && result.usage && index < attempts.lastIndex
             if (retry) {
                 last = result
                 continue
@@ -117,10 +132,29 @@ class PingClient(
         count: Int,
         timeoutSec: Int,
         payloadBytes: Int = 64,
+        bind: String? = null,
+        onUpdate: (PingSummary) -> Unit,
+    ): PingSummary {
+        return try {
+            pingManyBound(host, count, timeoutSec, payloadBytes, bind, onUpdate)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            if (bind.isNullOrBlank()) throw error
+            pingManyBound(host, count, timeoutSec, payloadBytes, null, onUpdate)
+        }
+    }
+
+    private suspend fun pingManyBound(
+        host: String,
+        count: Int,
+        timeoutSec: Int,
+        payloadBytes: Int,
+        bind: String?,
         onUpdate: (PingSummary) -> Unit,
     ): PingSummary {
         var lastError = "ping не выполнился"
-        val attempts = commands(host, count = count, timeoutSec = timeoutSec, ttl = null, payloadBytes = payloadBytes, numeric = true)
+        val attempts = commands(host, count = count, timeoutSec = timeoutSec, ttl = null, payloadBytes = payloadBytes, numeric = true, source = bind)
         for ((index, command) in attempts.withIndex()) {
             coroutineContext.ensureActive()
             val outcome = collect(host, command, count, timeoutSec, onUpdate)

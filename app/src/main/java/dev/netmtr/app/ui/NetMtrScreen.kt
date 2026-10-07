@@ -76,6 +76,7 @@ import dev.netmtr.app.MainViewModel
 import dev.netmtr.app.RunPhase
 import dev.netmtr.app.probe.ChannelLoad
 import dev.netmtr.app.probe.HopRow
+import dev.netmtr.app.probe.Hosts
 import dev.netmtr.app.probe.LanIdentity
 import dev.netmtr.app.probe.LanSurvey
 import dev.netmtr.app.probe.PingSummary
@@ -493,6 +494,13 @@ private fun BriefReport(state: dev.netmtr.app.UiState) {
     state.speed?.let { speed -> BriefSpeed(speed) }
     state.pingSummary?.let { summary ->
         SectionCard("Пинг ${summary.target}") {
+            if ((summary.avgMs ?: 99.0) < 2.0 && !Hosts.isPrivate(summary.target)) {
+                Text(
+                    "Слишком быстро для узла в интернете. Ответ, скорее всего, отдал VPN.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             StatRow(summary)
         }
     }
@@ -703,6 +711,13 @@ private fun PingCard(summary: PingSummary) {
     AppCard {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Пинг ${summary.target}", style = MaterialTheme.typography.titleMedium)
+            if ((summary.avgMs ?: 99.0) < 2.0 && !Hosts.isPrivate(summary.target)) {
+                Text(
+                    "Слишком быстро для узла в интернете. Ответ, скорее всего, отдал VPN.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             StatRow(summary)
             LatencyBars(summary.samples, MaterialTheme.colorScheme.primary)
         }
