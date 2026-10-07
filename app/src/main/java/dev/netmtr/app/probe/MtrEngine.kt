@@ -1,13 +1,15 @@
 package dev.netmtr.app.probe
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.job
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import java.net.InetAddress
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.coroutineContext
 
 data class MtrProgress(
@@ -43,31 +45,49 @@ class MtrEngine(private val ping: PingClient) {
                 pathLimit = discover(host, limit, timeoutSec, payloadBytes, resolveNames, names, slots) { ttl ->
                     onUpdate(MtrProgress(cycle, cycles, ttl, limit, slots.rows()))
                 }
+                val spent = (System.nanoTime() - cycleStarted) / 1_000_000
+                val wait = intervalMs - spent
+                if (wait > 0) delay(wait)
             } else {
-                val probes = coroutineScope {
-                    (1..limit).map { ttl ->
-                        async {
-                            coroutineContext.ensureActive()
-                            ttl to ping.probe(
-                                host,
-                                ttl,
-                                timeoutSec,
-                                payloadBytes = payloadBytes,
-                                numeric = !resolveNames,
-                            )
-                        }
-                    }.awaitAll()
-                }
+                val probes = probeCycle(host, limit, timeoutSec, intervalMs, payloadBytes, resolveNames)
                 for ((ttl, probe) in probes) {
                     hear(slots, names, ttl, probe, resolveNames)
                 }
                 onUpdate(MtrProgress(cycle, cycles, limit, limit, slots.rows()))
             }
-            val spent = (System.nanoTime() - cycleStarted) / 1_000_000
-            val wait = intervalMs - spent
-            if (wait > 0) delay(wait)
         }
         return slots.rows()
+    }
+
+    private suspend fun probeCycle(
+        host: String,
+        limit: Int,
+        timeoutSec: Int,
+        intervalMs: Long,
+        payloadBytes: Int,
+        resolveNames: Boolean,
+    ): List<Pair<Int, Probe>> = supervisorScope {
+        val parent = coroutineContext.job
+        val open = AtomicBoolean(true)
+        val jobs = (1..limit).map { ttl ->
+            ttl to async {
+                try {
+                    ping.probe(host, ttl, timeoutSec, payloadBytes = payloadBytes, numeric = !resolveNames)
+                } catch (cancelled: CancellationException) {
+                    if (parent.isActive && !open.get()) Probe.Timeout else throw cancelled
+                }
+            }
+        }
+        delay(intervalMs.coerceAtLeast(1))
+        open.set(false)
+        jobs.map { (ttl, deferred) ->
+            if (!deferred.isCompleted) deferred.cancel()
+            val probe = runCatching { deferred.await() }.getOrElse { error ->
+                if (error is CancellationException) throw error
+                Probe.Failure(error.message ?: "ошибка пинга", usage = false)
+            }
+            ttl to probe
+        }
     }
 
     private suspend fun discover(

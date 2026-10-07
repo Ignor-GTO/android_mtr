@@ -17,6 +17,7 @@ object TelegramReport {
 
         result.speed?.let { appendSpeed(it) }
         result.wifi?.let { appendWifi(it) }
+        result.lan?.let { appendLan(it) }
         appendPings(result)
         if (result.hops.isNotEmpty()) appendMtr(result)
         result.network?.let { appendNetwork(result, it) }
@@ -54,6 +55,31 @@ object TelegramReport {
                     channel.band,
                     channel.neighbors.toString(),
                     status,
+                )
+            }
+        }
+    }
+
+    private fun StringBuilder.appendLan(survey: LanSurvey) {
+        if (survey.error != null) {
+            append("<p>").append(esc(survey.error)).append("</p>")
+            return
+        }
+        survey.note?.let { append("<p>").append(esc(it)).append("</p>") }
+        table(
+            "Устройства в сети: ${survey.devices.size}",
+            listOf("Адрес", "Имя", "MAC", "мс"),
+            rightFrom = 3,
+        ) {
+            if (survey.devices.isEmpty()) {
+                row("—", "не найдены", "—", "—")
+            }
+            survey.devices.forEach { device ->
+                row(
+                    if (device.gateway) "${device.address} шлюз" else device.address,
+                    device.name ?: "—",
+                    device.mac ?: "—",
+                    device.rttMs?.let { TextFormat.ms(it) } ?: "—",
                 )
             }
         }

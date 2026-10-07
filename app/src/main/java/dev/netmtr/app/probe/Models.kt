@@ -9,6 +9,7 @@ enum class TestMode(val title: String) {
     PING("Пинг"),
     SPEED("Скорость"),
     WIFI("Частоты Wi‑Fi"),
+    LAN("Устройства в сети"),
 }
 
 class ProbeException(message: String) : Exception(message)
@@ -149,6 +150,7 @@ data class TestResult(
     val hostCache: Int? = null,
     val resolveNames: Boolean? = null,
     val wifi: WifiSurvey? = null,
+    val lan: LanSurvey? = null,
 )
 
 object Rtt {

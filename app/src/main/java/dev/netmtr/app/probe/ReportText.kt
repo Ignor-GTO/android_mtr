@@ -93,6 +93,7 @@ object ReportText {
 
         result.speed?.let { appendSpeed(it) }
         result.wifi?.let { appendWifi(it) }
+        result.lan?.let { appendLan(it) }
 
         result.gatewayPing?.let { appendPing("Пинг шлюза", it) }
         result.targetPing?.let { appendPing("Пинг цели", it) }
@@ -137,6 +138,7 @@ object ReportText {
         appendLine("• Потери только на промежуточном прыжке при чистых следующих прыжках обычно значат, что маршрутизатор молчит на traceroute.")
         appendLine("• Потери на пинге цели или на последнем отвечающем узле — повод для администратора сети.")
         appendLine("• Потери и большая задержка до шлюза указывают на Wi‑Fi или локальную сеть.")
+        appendLine("• В списке устройств только адреса, которые ответили на пинг или уже есть в ARP. Молчащие телефоны не видны.")
         appendLine("• Скачок средней задержки показывает участок, где появляется основная задержка.")
         appendLine()
         appendLine("Отчёт собран на устройстве. Приложение само никуда его не отправляет.")
@@ -153,6 +155,30 @@ object ReportText {
         appendLine("↑ отдача       ${TextFormat.latencyMs(speed.uploadLatencyMs)} мс")
         val errors = listOfNotNull(speed.downloadError, speed.uploadError)
         if (errors.isNotEmpty()) appendLine(errors.joinToString("; "))
+    }
+
+    private fun StringBuilder.appendLan(survey: LanSurvey) {
+        appendLine()
+        appendLine("Устройства в сети")
+        appendLine("------------------")
+        if (survey.error != null) {
+            appendLine(survey.error)
+            return
+        }
+        survey.localAddress?.let { appendLine("Наш адрес: $it/${survey.prefix ?: "—"}") }
+        appendLine("Проверено: ${survey.scanned} из ${survey.planned}. Ответили: ${survey.devices.size}.")
+        survey.note?.let { appendLine(it) }
+        if (survey.devices.isEmpty()) {
+            appendLine("Живых адресов не найдено.")
+            return
+        }
+        appendLine("Адрес            Имя / MAC                         мс")
+        survey.devices.forEach { device ->
+            val label = listOfNotNull(device.name, device.mac).joinToString(" · ").ifBlank { "—" }
+            val role = if (device.gateway) " шлюз" else ""
+            val rtt = device.rttMs?.let { TextFormat.ms(it) } ?: "—"
+            appendLine("${device.address.padEnd(16)} ${label.take(32).padEnd(32)} $rtt$role")
+        }
     }
 
     private fun StringBuilder.appendWifi(survey: WifiSurvey) {

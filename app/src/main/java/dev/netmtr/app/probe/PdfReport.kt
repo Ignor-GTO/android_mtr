@@ -80,6 +80,30 @@ object PdfReport {
                     )
                 }
             }
+            result.lan?.let { survey ->
+                heading("Устройства в сети")
+                if (survey.error != null) {
+                    paragraph(survey.error)
+                } else {
+                    survey.localAddress?.let { paragraph("Наш адрес: $it/${survey.prefix ?: "—"}") }
+                    paragraph("Проверено ${survey.scanned} из ${survey.planned}. Ответили: ${survey.devices.size}.")
+                    survey.note?.let { paragraph(it) }
+                    if (survey.devices.isNotEmpty()) {
+                        table(
+                            listOf(110f, 150f, 90f, 50f),
+                            listOf("Адрес", "Имя", "MAC", "мс"),
+                            survey.devices.map { device ->
+                                listOf(
+                                    if (device.gateway) "${device.address} шлюз" else device.address,
+                                    device.name ?: "—",
+                                    device.mac ?: "—",
+                                    device.rttMs?.let { TextFormat.ms(it) } ?: "—",
+                                )
+                            },
+                        )
+                    }
+                }
+            }
             result.network?.let { network ->
                 heading("Устройство и сеть")
                 paragraph("${network.manufacturer} ${network.model}, Android ${network.androidRelease}")

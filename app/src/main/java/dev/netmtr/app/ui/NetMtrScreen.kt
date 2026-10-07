@@ -69,6 +69,7 @@ import dev.netmtr.app.MainViewModel
 import dev.netmtr.app.RunPhase
 import dev.netmtr.app.probe.ChannelLoad
 import dev.netmtr.app.probe.HopRow
+import dev.netmtr.app.probe.LanSurvey
 import dev.netmtr.app.probe.PingSummary
 import dev.netmtr.app.probe.SpeedResult
 import dev.netmtr.app.probe.TextFormat
@@ -324,6 +325,7 @@ private fun SetupForm(
         OutlinedButton(onClick = viewModel::runSpeed, modifier = Modifier.weight(1f)) { Text("Скорость") }
     }
     OutlinedButton(onClick = onWifi, modifier = Modifier.fillMaxWidth()) { Text("Частоты Wi‑Fi") }
+    OutlinedButton(onClick = viewModel::runLan, modifier = Modifier.fillMaxWidth()) { Text("Устройства в сети") }
     Text(
         "Spectr IT NetMTR-2 ${BuildConfig.VERSION_NAME}. Держите приложение открытым, пока идёт проверка.",
         style = MaterialTheme.typography.bodySmall,
@@ -364,6 +366,7 @@ private fun SettingsSection(
 private fun LiveStage(state: dev.netmtr.app.UiState) {
     when (state.phase) {
         RunPhase.WIFI -> state.wifi?.let { WifiCard(it) } ?: StagePlaceholder(state.status)
+        RunPhase.LAN -> state.lan?.let { DevicesCard(it) } ?: StagePlaceholder(state.status)
         RunPhase.GATEWAY, RunPhase.PING -> state.pingSummary?.let { PingCard(it) } ?: StagePlaceholder(state.status)
         RunPhase.MTR -> if (state.hops.isNotEmpty()) HopCard(state.hops) else StagePlaceholder(state.status)
         RunPhase.SPEED -> state.speed?.let { SpeedCard(it) } ?: StagePlaceholder(state.status)
@@ -408,6 +411,7 @@ private fun BriefReport(state: dev.netmtr.app.UiState) {
         }
     }
     state.wifi?.let { survey -> BriefWifi(survey) }
+    state.lan?.let { survey -> DevicesCard(survey) }
     if (state.hops.isNotEmpty()) BriefRoute(state.hops)
 }
 
@@ -507,8 +511,63 @@ private fun FullReport(state: dev.netmtr.app.UiState) {
     if (state.info.isNotEmpty()) InfoCard(state.info)
     state.speed?.let { SpeedCard(it) }
     state.wifi?.let { WifiCard(it) }
+    state.lan?.let { DevicesCard(it) }
     state.pingSummary?.let { PingCard(it) }
     if (state.hops.isNotEmpty()) HopCard(state.hops)
+}
+
+@Composable
+private fun DevicesCard(survey: LanSurvey) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Устройства в сети", style = MaterialTheme.typography.titleMedium)
+            if (survey.error != null) {
+                Text(survey.error, color = MaterialTheme.colorScheme.error)
+            } else {
+                Row(Modifier.fillMaxWidth()) {
+                    Metric("Найдено", survey.devices.size.toString(), modifier = Modifier.weight(1f))
+                    Metric("Проверено", "${survey.scanned}/${survey.planned}", modifier = Modifier.weight(1f))
+                }
+                survey.localAddress?.let { address ->
+                    Text(
+                        "Наш адрес $address/${survey.prefix ?: "—"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                survey.note?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (survey.devices.isEmpty() && survey.scanned >= survey.planned && survey.planned > 0) {
+                    Text("Живых адресов не найдено. Часть телефонов не отвечает на пинг.")
+                }
+                survey.devices.forEach { device ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                if (device.gateway) "${device.address} · шлюз" else device.address,
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            val detail = listOfNotNull(device.name, device.mac).joinToString(" · ")
+                            if (detail.isNotBlank()) {
+                                Text(
+                                    detail,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                        Text(
+                            device.rttMs?.let { "${TextFormat.ms(it)} мс" } ?: "ARP",
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable

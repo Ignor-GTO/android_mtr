@@ -8,6 +8,8 @@ import androidx.lifecycle.viewModelScope
 import dev.netmtr.app.probe.DnsResult
 import dev.netmtr.app.probe.HopRow
 import dev.netmtr.app.probe.Hosts
+import dev.netmtr.app.probe.LanScanner
+import dev.netmtr.app.probe.LanSurvey
 import dev.netmtr.app.probe.HttpResult
 import dev.netmtr.app.probe.MtrEngine
 import dev.netmtr.app.probe.NetChecks
@@ -49,6 +51,7 @@ enum class RunPhase {
     PING,
     MTR,
     SPEED,
+    LAN,
 }
 
 data class UiState(
@@ -69,6 +72,7 @@ data class UiState(
     val pingSummary: PingSummary? = null,
     val speed: SpeedResult? = null,
     val wifi: WifiSurvey? = null,
+    val lan: LanSurvey? = null,
     val report: String? = null,
     val error: String? = null,
     val phase: RunPhase = RunPhase.IDLE,
@@ -102,6 +106,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun runPing() = launch(TestMode.PING) { draft -> runPing(draft) }
     fun runSpeed() = launch(TestMode.SPEED) { draft -> runSpeed(draft) }
     fun runWifi() = launch(TestMode.WIFI) { draft -> runWifiSurvey(draft) }
+    fun runLan() = launch(TestMode.LAN) { draft -> runLanScan(draft) }
 
     fun stop() {
         job?.cancel()
@@ -117,6 +122,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 pingSummary = null,
                 speed = null,
                 wifi = null,
+                lan = null,
                 info = emptyList(),
                 error = null,
                 progress = null,
@@ -169,10 +175,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 pingSummary = null,
                 speed = null,
                 wifi = null,
+                lan = null,
                 info = emptyList(),
                 progress = null,
                 phase = when (mode) {
                     TestMode.WIFI -> RunPhase.WIFI
+                    TestMode.LAN -> RunPhase.LAN
                     TestMode.MTR, TestMode.TRACE -> RunPhase.MTR
                     TestMode.SPEED -> RunPhase.SPEED
                     else -> RunPhase.NETWORK
@@ -210,6 +218,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(phase = RunPhase.NETWORK, status = "Сеть…") }
         captureNetwork(draft)
         runWifiSurvey(draft)
+        runLanScan(draft)
         _state.update { it.copy(phase = RunPhase.EDGE, status = "DNS, веб и внешний адрес…", progress = null) }
         coroutineScope {
             val edgeTask = async { NetChecks.edge() }
@@ -309,6 +318,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         refreshInfo(draft)
     }
 
+    private suspend fun runLanScan(draft: Draft) {
+        if (draft.network == null) captureNetwork(draft)
+        _state.update { it.copy(phase = RunPhase.LAN, progress = 0f, status = "Поиск устройств в сети…") }
+        val survey = try {
+            LanScanner(ping).collect(getApplication()) { progress ->
+                draft.lan = progress
+                _state.update {
+                    it.copy(
+                        lan = progress,
+                        phase = RunPhase.LAN,
+                        progress = progress.scanned.toFloat() / progress.planned.coerceAtLeast(1),
+                        status = "Устройства: ${progress.scanned} из ${progress.planned}, найдено ${progress.devices.size}",
+                    )
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            LanSurvey.failed(error.message ?: "Не удалось найти устройства")
+        }
+        draft.lan = survey
+        _state.update { it.copy(lan = survey, phase = RunPhase.LAN) }
+        refreshInfo(draft)
+    }
+
     private suspend fun runSpeed(draft: Draft) {
         if (draft.network == null) captureNetwork(draft)
         _state.update { it.copy(phase = RunPhase.SPEED, progress = null, status = "Замер скорости…") }
@@ -400,6 +434,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             lines += "DOWNLOAD Mbps ${TextFormat.mbpsNumber(speed.downloadMbps)} · UPLOAD Mbps ${TextFormat.mbpsNumber(speed.uploadMbps)}"
             lines += "Ping ms ${TextFormat.latencyMs(speed.pingMs)} · ↓ ${TextFormat.latencyMs(speed.downloadLatencyMs)} · ↑ ${TextFormat.latencyMs(speed.uploadLatencyMs)}"
         }
+        draft.lan?.let { survey ->
+            if (survey.error != null) {
+                lines += "Устройства: ${survey.error}"
+            } else {
+                lines += "Устройства в сети: ${survey.devices.size}"
+            }
+        }
         draft.wifi?.let { survey ->
             lines += survey.routerLine()
             if (survey.error == null) {
@@ -423,6 +464,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 pingSummary = result.targetPing ?: it.pingSummary,
                 speed = result.speed ?: it.speed,
                 wifi = result.wifi ?: it.wifi,
+                lan = result.lan ?: it.lan,
                 info = it.info,
                 error = result.error,
                 progress = 1f,
@@ -468,6 +510,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         var hostCache: Int? = null
         var resolveNames: Boolean? = null
         var wifi: WifiSurvey? = null
+        var lan: LanSurvey? = null
 
         fun toResult(stopped: Boolean, version: String): TestResult {
             return TestResult(
@@ -500,6 +543,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 hostCache = hostCache,
                 resolveNames = resolveNames,
                 wifi = wifi,
+                lan = lan,
             )
         }
     }
