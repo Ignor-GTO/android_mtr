@@ -174,7 +174,7 @@ object ReportText {
         }
         appendLine("Адрес            Имя / MAC                         мс")
         survey.devices.forEach { device ->
-            val label = listOfNotNull(device.name, device.mac).joinToString(" · ").ifBlank { "—" }
+            val label = listOfNotNull(device.name, device.mac?.let(LanIdentity::displayMac)).joinToString(" · ").ifBlank { "—" }
             val role = if (device.gateway) " шлюз" else ""
             val rtt = device.rttMs?.let { TextFormat.ms(it) } ?: "—"
             appendLine("${device.address.padEnd(16)} ${label.take(32).padEnd(32)} $rtt$role")

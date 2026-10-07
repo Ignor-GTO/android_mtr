@@ -2,16 +2,20 @@ package dev.netmtr.app.probe
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.wifi.WifiManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.InetAddress
+import java.net.SocketTimeoutException
+import java.util.concurrent.TimeUnit
 import kotlin.coroutines.coroutineContext
 
 class LanScanner(private val ping: PingClient) {
@@ -69,7 +73,8 @@ class LanScanner(private val ping: PingClient) {
             scanned += batch.size
             onUpdate(snapshot())
         }
-        val arp = LanPlan.parseArp(readArp())
+        val arp = LanPlan.parseArp(readArp()) + LanIdentity.parseNeigh(readNeigh())
+        val routerMac = routerMac(context)
         val targetSet = targets.toSet()
         for ((address, mac) in arp) {
             if (address !in targetSet && address != endpoint.gateway) continue
@@ -82,13 +87,25 @@ class LanScanner(private val ping: PingClient) {
                 gateway = address == endpoint.gateway,
             )).copy(mac = mac)
         }
+        val gateway = endpoint.gateway
+        if (gateway != null && routerMac != null) {
+            val current = found[gateway]
+            if (current == null || current.mac == null) {
+                found[gateway] = (current ?: LanDevice(gateway, routerMac, null, null, gateway = true)).copy(
+                    mac = current?.mac ?: routerMac,
+                    gateway = true,
+                )
+            }
+        }
         val raw = found.values.toList()
         val real = LanPlan.keepRealDevices(raw, endpoint.gateway)
         val dropped = raw.size - real.size
-        val named = coroutineScope {
+        val asked = askDevices(context, real)
+        val named = withContext(Dispatchers.IO) {
             real.map { device ->
-                async { device.copy(name = lookupName(device.address)) }
-            }.awaitAll()
+                val hostname = asked[device.address] ?: lookupDns(device.address)
+                device.copy(name = hostname ?: LanIdentity.vendor(device.mac))
+            }
         }
         found.clear()
         named.forEach { found[it.address] = it }
@@ -102,15 +119,80 @@ class LanScanner(private val ping: PingClient) {
         return base.copy(note = combined).also(onUpdate)
     }
 
-    private suspend fun lookupName(address: String): String? = withTimeoutOrNull(400) {
-        withContext(Dispatchers.IO) {
-            val host = runCatching { InetAddress.getByName(address).hostName }.getOrNull() ?: return@withContext null
-            if (host.isBlank() || host == address) null else host
+    private fun lookupDns(address: String): String? {
+        val host = runCatching { InetAddress.getByName(address).hostName }.getOrNull() ?: return null
+        if (host.isBlank() || host == address) return null
+        return host
+    }
+
+    private suspend fun askDevices(context: Context, devices: List<LanDevice>): Map<String, String> {
+        if (devices.isEmpty()) return emptyMap()
+        return withContext(Dispatchers.IO) {
+            val wifi = context.applicationContext.getSystemService(WifiManager::class.java)
+            val lock = runCatching { wifi?.createMulticastLock("netmtr-names") }.getOrNull()
+            runCatching { lock?.setReferenceCounted(false); lock?.acquire() }
+            try {
+                DatagramSocket().use { socket ->
+                    socket.broadcast = true
+                    socket.soTimeout = 250
+                    val netbios = LanIdentity.netbiosQuery()
+                    for (device in devices) {
+                        val ip = runCatching { InetAddress.getByName(device.address) }.getOrNull() ?: continue
+                        val query = LanIdentity.ptrQuery(device.address)
+                        if (query.isNotEmpty()) {
+                            runCatching { socket.send(DatagramPacket(query, query.size, ip, 5353)) }
+                        }
+                        runCatching { socket.send(DatagramPacket(netbios, netbios.size, ip, 137)) }
+                    }
+                    val found = linkedMapOf<String, String>()
+                    val deadline = System.nanoTime() + 1_500_000_000L
+                    val buffer = ByteArray(1500)
+                    while (System.nanoTime() < deadline && found.size < devices.size) {
+                        val packet = DatagramPacket(buffer, buffer.size)
+                        try {
+                            socket.receive(packet)
+                        } catch (_: SocketTimeoutException) {
+                            continue
+                        }
+                        val source = packet.address?.hostAddress ?: continue
+                        val data = packet.data.copyOf(packet.length)
+                        val name = if (packet.port == 137) {
+                            LanIdentity.parseNetbios(data)
+                        } else {
+                            LanIdentity.hostnames(data).firstOrNull()
+                        }
+                        if (!name.isNullOrBlank()) found[source] = name
+                    }
+                    found
+                }
+            } catch (_: Exception) {
+                emptyMap()
+            } finally {
+                runCatching { if (lock?.isHeld == true) lock.release() }
+            }
         }
     }
 
     private fun readArp(): String {
         return runCatching { File("/proc/net/arp").readText() }.getOrDefault("")
+    }
+
+    private fun readNeigh(): String {
+        return runCatching {
+            val process = ProcessBuilder("ip", "neigh").redirectErrorStream(true).start()
+            val text = process.inputStream.bufferedReader().readText()
+            process.waitFor(2, TimeUnit.SECONDS)
+            text
+        }.getOrDefault("")
+    }
+
+    @Suppress("DEPRECATION")
+    private fun routerMac(context: Context): String? {
+        val wifi = context.applicationContext.getSystemService(WifiManager::class.java) ?: return null
+        val bssid = runCatching { wifi.connectionInfo?.bssid }.getOrNull() ?: return null
+        val mac = bssid.lowercase()
+        if (mac == "02:00:00:00:00:00" || mac.count { it == ':' } != 5) return null
+        return mac
     }
 
     private fun endpoint(context: Context): Endpoint? {

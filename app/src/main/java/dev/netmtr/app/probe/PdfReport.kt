@@ -96,7 +96,7 @@ object PdfReport {
                                 listOf(
                                     if (device.gateway) "${device.address} шлюз" else device.address,
                                     device.name ?: "—",
-                                    device.mac ?: "—",
+                                    LanIdentity.displayMac(device.mac),
                                     device.rttMs?.let { TextFormat.ms(it) } ?: "—",
                                 )
                             },

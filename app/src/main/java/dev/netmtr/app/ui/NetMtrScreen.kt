@@ -69,6 +69,7 @@ import dev.netmtr.app.MainViewModel
 import dev.netmtr.app.RunPhase
 import dev.netmtr.app.probe.ChannelLoad
 import dev.netmtr.app.probe.HopRow
+import dev.netmtr.app.probe.LanIdentity
 import dev.netmtr.app.probe.LanSurvey
 import dev.netmtr.app.probe.PingSummary
 import dev.netmtr.app.probe.SpeedResult
@@ -93,6 +94,7 @@ fun NetMtrScreen(viewModel: MainViewModel = viewModel()) {
         when (pendingWifiAction) {
             "full" -> viewModel.runFull()
             "wifi" -> viewModel.runWifi()
+            "lan" -> viewModel.runLan()
         }
     }
     val savePdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
@@ -196,6 +198,14 @@ fun NetMtrScreen(viewModel: MainViewModel = viewModel()) {
                             askWifi.launch(wifiPermissions())
                         }
                     },
+                    onLan = {
+                        if (hasWifiPermission(context)) {
+                            viewModel.runLan()
+                        } else {
+                            pendingWifiAction = "lan"
+                            askWifi.launch(wifiPermissions())
+                        }
+                    },
                 )
             }
         }
@@ -257,6 +267,7 @@ private fun SetupForm(
     viewModel: MainViewModel,
     onFull: () -> Unit,
     onWifi: () -> Unit,
+    onLan: () -> Unit,
 ) {
     Text(stringResource(dev.netmtr.app.R.string.app_name), style = MaterialTheme.typography.headlineMedium)
     Text(
@@ -324,7 +335,7 @@ private fun SetupForm(
         OutlinedButton(onClick = viewModel::runSpeed, modifier = Modifier.weight(1f)) { Text("Скорость") }
     }
     OutlinedButton(onClick = onWifi, modifier = Modifier.fillMaxWidth()) { Text("Частоты Wi‑Fi") }
-    OutlinedButton(onClick = viewModel::runLan, modifier = Modifier.fillMaxWidth()) { Text("Устройства в сети") }
+    OutlinedButton(onClick = onLan, modifier = Modifier.fillMaxWidth()) { Text("Устройства в сети") }
     Text(
         "Spectr IT NetMTR-2 ${BuildConfig.VERSION_NAME}. Держите приложение открытым, пока идёт проверка.",
         style = MaterialTheme.typography.bodySmall,
@@ -547,16 +558,18 @@ private fun DevicesCard(survey: LanSurvey) {
                                 if (device.gateway) "${device.address} · шлюз" else device.address,
                                 style = MaterialTheme.typography.titleSmall,
                             )
-                            val detail = listOfNotNull(device.name, device.mac).joinToString(" · ")
-                            if (detail.isNotBlank()) {
-                                Text(
-                                    detail,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
+                            Text(
+                                device.name ?: "Без имени",
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                LanIdentity.displayMac(device.mac),
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                         Text(
                             device.rttMs?.let { "${TextFormat.ms(it)} мс" } ?: "ARP",
