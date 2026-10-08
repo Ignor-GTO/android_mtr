@@ -12,6 +12,7 @@
 *.ap_
 *.aab
 app/build/
+desktop/build/
 *.log
 hs_err_pid*.log
 keystore.properties

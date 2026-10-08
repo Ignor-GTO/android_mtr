@@ -15,6 +15,9 @@ dependencies {
 compose.desktop {
     application {
         mainClass = "dev.netmtr.desktop.MainKt"
+        buildTypes.release.proguard {
+            isEnabled.set(false)
+        }
         nativeDistributions {
             targetFormats(TargetFormat.Exe)
             packageName = "SpectrIT-NetMTR"
