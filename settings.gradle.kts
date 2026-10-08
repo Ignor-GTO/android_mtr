@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "NetMTR"
 include(":app")
+include(":desktop")

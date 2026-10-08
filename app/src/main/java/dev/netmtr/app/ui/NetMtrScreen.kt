@@ -727,14 +727,9 @@ private fun PingCard(summary: PingSummary) {
 @Composable
 private fun HopCard(hops: List<HopRow>) {
     AppCard {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Маршрут", style = MaterialTheme.typography.titleMedium)
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Маршрут", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 4.dp))
             HopTable(hops)
-            Text(
-                "Молчащий промежуточный прыжок при живых следующих узлах обычно фильтрует ICMP, а не обрывает канал.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }
@@ -1001,27 +996,8 @@ private fun LatencyBars(samples: List<Double>, color: Color) {
 }
 
 @Composable
-private fun HopStat(label: String, value: String, modifier: Modifier = Modifier, valueColor: Color? = null) {
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            value,
-            color = valueColor ?: MaterialTheme.colorScheme.onSurface,
-            style = MaterialTheme.typography.labelLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-        )
-    }
-}
-
-@Composable
 private fun HopTable(hops: List<HopRow>) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column {
         hops.forEach { row ->
             val accent = when {
                 row.received == 0 -> MaterialTheme.colorScheme.outline
@@ -1029,56 +1005,44 @@ private fun HopTable(hops: List<HopRow>) {
                 row.reachedTarget -> Spectr.emerald
                 else -> Spectr.indigo500
             }
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant,
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Column(
-                    Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                Box(
+                    modifier = Modifier
+                        .size(22.dp)
+                        .background(accent, CircleShape),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .background(accent, CircleShape),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(row.hop.toString(), color = Color.White, style = MaterialTheme.typography.labelLarge)
-                        }
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                row.address,
-                                style = MaterialTheme.typography.titleSmall,
-                                maxLines = 3,
-                            )
-                            val others = row.addresses.filter { it != row.address && it.isNotBlank() }
-                            if (others.isNotEmpty()) {
-                                Text(
-                                    others.joinToString(", "),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        HopStat("Потери", TextFormat.pct(row.lossPercent), Modifier.weight(1f), accent)
-                        HopStat("Отпр", row.sent.toString(), Modifier.weight(1f))
-                        HopStat("Прин", row.received.toString(), Modifier.weight(1f))
-                        HopStat("Джит", TextFormat.ms(row.jitterMs), Modifier.weight(1f))
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        HopStat("Лучш", TextFormat.ms(row.bestMs), Modifier.weight(1f))
-                        HopStat("Сред", TextFormat.ms(row.avgMs), Modifier.weight(1f), accent)
-                        HopStat("Худш", TextFormat.ms(row.worstMs), Modifier.weight(1f))
-                        HopStat("Посл", TextFormat.ms(row.lastMs), Modifier.weight(1f))
-                    }
+                    Text(row.hop.toString(), color = Color.White, style = MaterialTheme.typography.labelSmall)
                 }
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        row.address,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        "потери ${TextFormat.pct(row.lossPercent)} · ${row.received}/${row.sent} · " +
+                            "лучш ${TextFormat.ms(row.bestMs)} · сред ${TextFormat.ms(row.avgMs)} · " +
+                            "худш ${TextFormat.ms(row.worstMs)} · посл ${TextFormat.ms(row.lastMs)} · джит ${TextFormat.ms(row.jitterMs)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Text(
+                    TextFormat.msUnit(row.avgMs),
+                    color = accent,
+                    style = MaterialTheme.typography.labelLarge,
+                )
             }
         }
     }
