@@ -19,6 +19,11 @@ data class DeskDevice(
     val rttMs: Double?,
 )
 
+data class DeskLan(
+    val devices: List<DeskDevice>,
+    val note: String?,
+)
+
 object WinExtra {
     fun speed(onStatus: (String) -> Unit): DeskSpeed {
         onStatus("Пинг…")
@@ -34,7 +39,10 @@ object WinExtra {
     fun wifi(): String {
         val current = command(listOf("netsh", "wlan", "show", "interfaces"))
         val nearby = command(listOf("netsh", "wlan", "show", "networks", "mode=bssid"))
-        if (current.isBlank() && nearby.isBlank()) return "Wi‑Fi адаптер не найден."
+        val blob = (current + "\n" + nearby).lowercase()
+        if (current.isBlank() && nearby.isBlank() || "no wireless" in blob || "нет беспровод" in blob) {
+            return "На этом компьютере нет Wi‑Fi. Проверка идёт через другой адаптер."
+        }
         return buildString {
             appendLine("Текущее подключение")
             appendLine(trimBlock(current).ifBlank { "Нет активного Wi‑Fi." })
@@ -44,10 +52,11 @@ object WinExtra {
         }.trim()
     }
 
-    fun lan(onStatus: (String) -> Unit): List<DeskDevice> {
-        val local = localIpv4() ?: return emptyList()
+    fun lan(onStatus: (String) -> Unit): DeskLan {
+        val local = localIpv4() ?: return DeskLan(emptyList(), "Не удалось определить адрес этого компьютера.")
         val prefix = local.substringBeforeLast('.')
-        val self = local.substringAfterLast('.').toIntOrNull() ?: return emptyList()
+        val self = local.substringAfterLast('.').toIntOrNull()
+            ?: return DeskLan(emptyList(), "Не удалось определить адрес этого компьютера.")
         onStatus("Поиск в $prefix.0/24…")
         val alive = linkedMapOf<String, Double>()
         val pool = Executors.newFixedThreadPool(24)
@@ -70,9 +79,35 @@ object WinExtra {
             pool.shutdownNow()
         }
         val arp = arpTable()
-        return alive.map { (address, rtt) ->
-            DeskDevice(address, arp[address], rtt)
+        val found = alive.map { (address, rtt) -> DeskDevice(address, arp[address], rtt) }
+        val (kept, hidProxy) = keepReal(found, gateway())
+        val note = if (hidProxy) "Одинаковые ответы шлюза скрыты: это не отдельные устройства." else null
+        return DeskLan(kept, note)
+    }
+
+    private fun keepReal(devices: List<DeskDevice>, gateway: String?): Pair<List<DeskDevice>, Boolean> {
+        val macCount = devices.mapNotNull { it.mac?.lowercase() }.groupingBy { it }.eachCount()
+        val nameless = devices.filter { it.mac == null && it.rttMs != null }
+        val sorted = nameless.mapNotNull { it.rttMs }.sorted()
+        val flood = sorted.size >= 16 && run {
+            val low = sorted[(sorted.size * 0.1).toInt()]
+            val high = sorted[(sorted.size * 0.9).toInt().coerceAtMost(sorted.lastIndex)]
+            high - low < 5.0
+        }
+        val median = sorted.getOrNull(sorted.size / 2)
+        val kept = devices.filter { device ->
+            val mac = device.mac?.lowercase()
+            if (mac != null) {
+                val shared = (macCount[mac] ?: 1) > 1
+                return@filter !shared || device.address == gateway
+            }
+            if (device.rttMs == null) return@filter false
+            if (!flood) return@filter true
+            if (device.address == gateway) return@filter true
+            val middle = median ?: return@filter false
+            kotlin.math.abs(device.rttMs - middle) >= 8.0
         }.sortedBy { it.address.substringAfterLast('.').toIntOrNull() ?: 0 }
+        return kept to (flood && kept.size < devices.size || kept.size < devices.size && macCount.any { it.value > 1 })
     }
 
     private fun readDownload(onStatus: (String) -> Unit): Pair<Double?, String?> {
@@ -176,6 +211,14 @@ object WinExtra {
         return addresses.firstOrNull { address ->
             !address.startsWith("127.") && !address.startsWith("169.254.")
         }
+    }
+
+    private fun gateway(): String? {
+        val text = command(listOf("ipconfig"))
+        return Regex("""(?i)(?:Default Gateway|Основной шлюз)[^:\r\n]*:\s*(\d+\.\d+\.\d+\.\d+)""")
+            .findAll(text)
+            .map { it.groupValues[1] }
+            .firstOrNull { it != "0.0.0.0" }
     }
 
     private fun arpTable(): Map<String, String> {

@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -33,13 +34,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.awt.Window
+import java.io.File
 import java.util.Locale
+import javax.swing.JFileChooser
+import javax.swing.filechooser.FileNameExtensionFilter
 
 fun main() = application {
     Window(
         onCloseRequest = ::exitApplication,
         title = "Spectr IT NetMTR",
-        state = rememberWindowState(width = 760.dp, height = 640.dp),
+        state = rememberWindowState(width = 860.dp, height = 760.dp),
     ) {
         MaterialTheme {
             DeskApp()
@@ -55,6 +60,7 @@ private fun DeskApp() {
     var running by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var job by remember { mutableStateOf<Job?>(null) }
+    val reportScroll = rememberScrollState()
 
     fun note(text: String) {
         scope.launch { status = text }
@@ -91,9 +97,51 @@ private fun DeskApp() {
         }
     }
 
+    fun saveReport() {
+        if (report.isBlank()) return
+        val chooser = JFileChooser().apply {
+            dialogTitle = "Сохранить отчёт"
+            selectedFile = File("SpectrIT-NetMTR-otchet.pdf")
+            fileFilter = FileNameExtensionFilter("PDF", "pdf")
+        }
+        val parent = Window.getWindows().firstOrNull { it.isActive }
+        if (chooser.showSaveDialog(parent) != JFileChooser.APPROVE_OPTION) return
+        val picked = chooser.selectedFile ?: return
+        val file = if (picked.extension.equals("pdf", ignoreCase = true)) picked else File(picked.parentFile, "${picked.name}.pdf")
+        val text = report
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) { ReportFile.writePdf(text, file) }
+                status = "Отчёт сохранён: ${file.absolutePath}"
+            } catch (error: Exception) {
+                status = error.message ?: "Не удалось сохранить отчёт"
+            }
+        }
+    }
+
+    fun sendReport() {
+        if (report.isBlank()) return
+        val text = report
+        scope.launch {
+            try {
+                val file = withContext(Dispatchers.IO) {
+                    val dir = File(System.getProperty("java.io.tmpdir"), "spectr-netmtr")
+                    val target = File(dir, "SpectrIT-NetMTR-report.pdf")
+                    ReportFile.writePdf(text, target)
+                    target
+                }
+                ReportFile.copy(text)
+                ProcessBuilder("explorer.exe", "/select,${file.absolutePath}").start()
+                status = "Текст отчёта скопирован. PDF выделен в папке — его можно переслать в Telegram."
+            } catch (error: Exception) {
+                status = error.message ?: "Не удалось подготовить отчёт"
+            }
+        }
+    }
+
     Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFF8FAFC)) {
         Column(
-            modifier = Modifier.padding(20.dp).verticalScroll(rememberScrollState()),
+            modifier = Modifier.padding(20.dp).fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text("Spectr IT NetMTR", style = MaterialTheme.typography.headlineSmall, color = Color(0xFF4F46E5))
@@ -176,20 +224,28 @@ private fun DeskApp() {
                     modifier = Modifier.weight(1f),
                 ) { Text("Устройства") }
             }
+            if (report.isNotBlank() && !running) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    Button(onClick = { sendReport() }, modifier = Modifier.weight(1f)) { Text("Отправить") }
+                    OutlinedButton(onClick = { saveReport() }, modifier = Modifier.weight(1f)) { Text("Сохранить") }
+                }
+            }
             if (running) {
                 OutlinedButton(onClick = { job?.cancel(); running = false; status = "Остановлено." }, modifier = Modifier.fillMaxWidth()) {
                     Text("Стоп")
                 }
             }
             if (report.isNotBlank()) {
-                Text(
-                    report,
+                Box(
                     modifier = Modifier
+                        .weight(1f)
                         .fillMaxWidth()
                         .background(Color.White, RoundedCornerShape(12.dp))
+                        .verticalScroll(reportScroll)
                         .padding(12.dp),
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                )
+                ) {
+                    Text(report, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                }
             }
         }
     }
@@ -225,7 +281,10 @@ private fun formatHops(hops: List<DeskHop>): String {
 }
 
 private fun ms(value: Double?): String {
-    return if (value == null) "—" else String.format(Locale.US, "%.0f", value)
+    if (value == null) return "—"
+    if (value < 1.0) return "<1"
+    if (value < 10.0) return String.format(Locale.US, "%.1f", value)
+    return String.format(Locale.US, "%.0f", value)
 }
 
 private fun pct(value: Double): String = String.format(Locale.US, "%.0f%%", value)
@@ -240,13 +299,14 @@ private fun formatSpeed(speed: DeskSpeed): String {
     }
 }
 
-private fun formatLan(devices: List<DeskDevice>): String {
+private fun formatLan(lan: DeskLan): String {
     return buildString {
-        appendLine("Устройства в сети: ${devices.size}")
-        if (devices.isEmpty()) {
+        appendLine("Устройства в сети: ${lan.devices.size}")
+        lan.note?.let { appendLine(it) }
+        if (lan.devices.isEmpty()) {
             appendLine("Живых адресов не найдено.")
         } else {
-            devices.forEach { device ->
+            lan.devices.forEach { device ->
                 appendLine(
                     device.address.padEnd(16) +
                         (device.mac ?: "—").padEnd(20) +

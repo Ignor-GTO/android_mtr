@@ -10,6 +10,8 @@ dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.9.0")
+    implementation("net.java.dev.jna:jna:5.15.0")
+    implementation("org.apache.pdfbox:pdfbox:2.0.32")
 }
 
 compose.desktop {
@@ -21,7 +23,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Exe)
             packageName = "SpectrIT-NetMTR"
-            packageVersion = "1.1.0"
+            packageVersion = "1.2.0"
             description = "Spectr IT NetMTR"
             vendor = "Spectr IT"
             windows {
