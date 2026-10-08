@@ -21,7 +21,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Exe)
             packageName = "SpectrIT-NetMTR"
-            packageVersion = "1.0.0"
+            packageVersion = "1.1.0"
             description = "Spectr IT NetMTR"
             vendor = "Spectr IT"
             windows {

@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -49,27 +50,39 @@ fun main() = application {
 @Composable
 private fun DeskApp() {
     var host by remember { mutableStateOf("8.8.8.8") }
-    var status by remember { mutableStateOf("Пинг и MTR для Windows. Проверка идёт с этого компьютера.") }
+    var status by remember { mutableStateOf("Пинг, MTR, скорость, Wi‑Fi и устройства. Проверка идёт с этого компьютера.") }
     var report by remember { mutableStateOf("") }
     var running by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var job by remember { mutableStateOf<Job?>(null) }
 
-    fun launch(block: suspend () -> String) {
+    fun note(text: String) {
+        scope.launch { status = text }
+    }
+
+    fun show(text: String) {
+        scope.launch { report = text }
+    }
+
+    fun launch(needsHost: Boolean = true, block: suspend (String) -> String) {
         if (running) return
         val target = host.trim()
-        if (target.isEmpty() || target.any { it.isWhitespace() }) {
+        if (needsHost && (target.isEmpty() || target.any { it.isWhitespace() })) {
             status = "Введите адрес без пробелов."
             return
         }
         running = true
         report = ""
-        status = "Идёт проверка $target…"
+        status = if (target.isBlank()) "Идёт проверка…" else "Идёт проверка $target…"
         job = scope.launch {
             try {
-                val text = withContext(Dispatchers.IO) { block() }
+                val text = withContext(Dispatchers.IO) { block(target) }
                 report = text
                 status = "Готово."
+            } catch (_: CancellationException) {
+                status = "Остановлено."
+            } catch (_: InterruptedException) {
+                status = "Остановлено."
             } catch (error: Exception) {
                 status = error.message ?: "Ошибка проверки"
             } finally {
@@ -93,31 +106,79 @@ private fun DeskApp() {
                 label = { Text("Адрес или IP") },
                 enabled = !running,
             )
+            Button(
+                onClick = {
+                    launch { target ->
+                        val parts = mutableListOf<String>()
+                        note("Пинг…")
+                        parts += formatPing(target, WinProbe.ping(target, count = 10, timeoutMs = 2000))
+                        show(parts.joinToString("\n\n"))
+                        note("MTR…")
+                        parts += formatHops(WinProbe.mtr(target, cycles = 10, maxHops = 20, timeoutMs = 1200) { rows ->
+                            show((parts + formatHops(rows)).joinToString("\n\n"))
+                        })
+                        show(parts.joinToString("\n\n"))
+                        note("Скорость…")
+                        parts += formatSpeed(WinExtra.speed(::note))
+                        show(parts.joinToString("\n\n"))
+                        note("Wi‑Fi…")
+                        parts += "Wi‑Fi\n${WinExtra.wifi()}"
+                        show(parts.joinToString("\n\n"))
+                        note("Устройства в сети…")
+                        parts += formatLan(WinExtra.lan(::note))
+                        parts.joinToString("\n\n")
+                    }
+                },
+                enabled = !running,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Полная проверка") }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = {
-                        launch {
-                            val ping = WinProbe.ping(host.trim(), count = 10, timeoutMs = 2000)
-                            formatPing(host.trim(), ping)
+                        launch { target ->
+                            formatHops(WinProbe.mtr(target, cycles = 10, maxHops = 20, timeoutMs = 1200) { show(formatHops(it)) })
                         }
                     },
                     enabled = !running,
-                ) { Text("Пинг") }
-                Button(
-                    onClick = {
-                        launch {
-                            val hops = WinProbe.mtr(host.trim(), cycles = 10, maxHops = 20, timeoutMs = 1500) { rows ->
-                                scope.launch { report = formatHops(rows) }
-                            }
-                            formatHops(hops)
-                        }
-                    },
-                    enabled = !running,
+                    modifier = Modifier.weight(1f),
                 ) { Text("MTR") }
-                if (running) {
-                    OutlinedButton(onClick = { job?.cancel(); running = false; status = "Остановлено." }) {
-                        Text("Стоп")
-                    }
+                OutlinedButton(
+                    onClick = {
+                        launch { target ->
+                            formatHops(WinProbe.mtr(target, cycles = 1, maxHops = 20, timeoutMs = 1500) { show(formatHops(it)) })
+                        }
+                    },
+                    enabled = !running,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Трасса") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { launch { target -> formatPing(target, WinProbe.ping(target, count = 10, timeoutMs = 2000)) } },
+                    enabled = !running,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Пинг") }
+                OutlinedButton(
+                    onClick = { launch { formatSpeed(WinExtra.speed(::note)) } },
+                    enabled = !running,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Скорость") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { launch(needsHost = false) { "Wi‑Fi\n${WinExtra.wifi()}" } },
+                    enabled = !running,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Wi‑Fi") }
+                OutlinedButton(
+                    onClick = { launch(needsHost = false) { formatLan(WinExtra.lan(::note)) } },
+                    enabled = !running,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Устройства") }
+            }
+            if (running) {
+                OutlinedButton(onClick = { job?.cancel(); running = false; status = "Остановлено." }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Стоп")
                 }
             }
             if (report.isNotBlank()) {
@@ -168,3 +229,34 @@ private fun ms(value: Double?): String {
 }
 
 private fun pct(value: Double): String = String.format(Locale.US, "%.0f%%", value)
+
+private fun formatSpeed(speed: DeskSpeed): String {
+    return buildString {
+        appendLine("Скорость")
+        appendLine("Загрузка  ${mbps(speed.downloadMbps)} Мбит/с")
+        appendLine("Отдача    ${mbps(speed.uploadMbps)} Мбит/с")
+        appendLine("Пинг      ${ms(speed.pingMs)} мс")
+        speed.error?.let { appendLine(it) }
+    }
+}
+
+private fun formatLan(devices: List<DeskDevice>): String {
+    return buildString {
+        appendLine("Устройства в сети: ${devices.size}")
+        if (devices.isEmpty()) {
+            appendLine("Живых адресов не найдено.")
+        } else {
+            devices.forEach { device ->
+                appendLine(
+                    device.address.padEnd(16) +
+                        (device.mac ?: "—").padEnd(20) +
+                        (device.rttMs?.let { "${ms(it)} мс" } ?: "—"),
+                )
+            }
+        }
+    }
+}
+
+private fun mbps(value: Double?): String {
+    return if (value == null) "—" else String.format(Locale.US, "%.2f", value)
+}

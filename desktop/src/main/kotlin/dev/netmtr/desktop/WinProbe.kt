@@ -104,11 +104,28 @@ object WinProbe {
     }
 
     private fun once(host: String, ttl: Int?, timeoutMs: Int): DeskReply {
+        if (Thread.currentThread().isInterrupted) throw InterruptedException()
+        calibrate()
         val command = mutableListOf("ping", "-4", "-n", "1", "-w", timeoutMs.coerceIn(200, 5000).toString())
         if (ttl != null) command += listOf("-i", ttl.toString())
         command += host
-        val text = run(command, timeoutMs + 1500L)
-        return parse(text)
+        val (text, elapsed) = runTimed(command, timeoutMs + 1500L)
+        val reply = parse(text)
+        if (reply is DeskReply.Transit && reply.rttMs == null) {
+            return reply.copy(rttMs = (elapsed - overheadMs).coerceAtLeast(0.2))
+        }
+        return reply
+    }
+
+    private fun calibrate() {
+        if (calibrated) return
+        synchronized(this) {
+            if (calibrated) return
+            val (text, elapsed) = runTimed(listOf("ping", "-4", "-n", "1", "-w", "1000", "127.0.0.1"), 2000L)
+            val reported = timeRe.find(text)?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0
+            overheadMs = (elapsed - reported).coerceIn(0.0, 120.0)
+            calibrated = true
+        }
     }
 
     private fun parse(text: String): DeskReply {
@@ -126,15 +143,20 @@ object WinProbe {
         }
     }
 
-    private fun run(command: List<String>, timeoutMs: Long): String {
+    private fun runTimed(command: List<String>, timeoutMs: Long): Pair<String, Double> {
         return runCatching {
+            val started = System.nanoTime()
             val process = ProcessBuilder(command).redirectErrorStream(true).start()
             val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
             val text = process.inputStream.bufferedReader(Charsets.UTF_8).readText()
             if (!finished) process.destroy()
-            text
-        }.getOrDefault("")
+            val elapsed = (System.nanoTime() - started) / 1_000_000.0
+            text to elapsed
+        }.getOrDefault("" to timeoutMs.toDouble())
     }
+
+    private var overheadMs: Double = 0.0
+    private var calibrated: Boolean = false
 
     private class Slot(val hop: Int) {
         var address: String = "*"
